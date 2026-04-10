@@ -2,7 +2,7 @@
 ## Design Document v1.0
 
 **Project:** Research Paper + GitHub Demo  
-**Authors:** Keerthi Rapolu + Co-author  
+**Authors:** Keerthi Rapolu + Rishika Naha 
 **Date:** April 2026  
 **Status:** Draft
 
@@ -25,7 +25,7 @@
 
 ---
 
-## 1. Problem Statement
+## 1. Problem Statement(comment: use hyper-scaler/cloud provider word for cloud)
 
 Modern enterprises run workloads across AWS, Azure, and GCP simultaneously. Each cloud uses a different billing schema, tagging convention, and discount model (Reserved Instances, Savings Plans, Committed Use Discounts). Finance and engineering teams lack a unified, accurate way to attribute costs to business units, teams, or products — leading to opaque cloud spend, poor accountability, and budget overruns.
 
@@ -77,13 +77,13 @@ Publish a research paper documenting the framework, design decisions, and evalua
 ┌─────────────────────────────────────────────────────────────────┐
 │                   LAYER 1: INGESTION (Raw)                      │
 │          Python scripts — pull & store as Parquet/CSV           │
-│                    Landing zone: local / S3                     │
+│                    Landing zone: local                    │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              LAYER 2: NORMALIZATION (Bronze → Silver)           │
-│         dbt models — map each cloud → unified CAS schema        │
+│         dbt models — map each cloud - unified CAS schema        │  
 │                       DuckDB engine                             │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
@@ -107,8 +107,7 @@ Publish a research paper documenting the framework, design decisions, and evalua
 
 ---
 
-## 4. Data Architecture — 4-Layer Pipeline
-
+## 4. Data Architecture — 4-Layer Pipeline  
 ### Layer 1 — Ingestion (Raw)
 
 **Purpose:** Pull billing exports from each cloud into a common landing zone.
@@ -127,7 +126,7 @@ Publish a research paper documenting the framework, design decisions, and evalua
 
 ---
 
-### Layer 2 — Normalization (Bronze → Silver)
+### Layer 2 — Normalization (Bronze → Silver) (comment: no need of unified CAS schema in bronze/silver, we need nec calucations seperate for aws,azure and gcp, then unify in gold)
 
 **Purpose:** Map each cloud's proprietary schema to the unified Cost Allocation Schema (CAS).
 
@@ -154,13 +153,13 @@ models/
 
 **Sub-modules:**
 
-| Module | File | Owner |
+| Module | File | Owner |  (comment:redistributed work)
 |---|---|---|
-| Tag-based allocation | `allocation/tag_allocator.py` | Keerthi |
+| Tag-based allocation | `allocation/tag_allocator.py` | Rishika Naha |
 | Shared cost distribution | `allocation/shared_cost.py` | Keerthi |
 | NEC / RI amortization | `allocation/nec_model.py` | Keerthi |
-| Untagged heuristics | `allocation/untagged_heuristic.py` | Co-author |
-| ML classifier (optional) | `allocation/untagged_ml.py` | Co-author |
+| Untagged heuristics | `allocation/untagged_heuristic.py` | Rishika Naha |
+| ML classifier (optional) | `allocation/untagged_ml.py` | Rishika Naha/Keerthi |
 
 ---
 
@@ -374,11 +373,11 @@ multicloud-finops-framework/
 │
 ├── allocation/
 │   ├── __init__.py
-│   ├── tag_allocator.py        # Keerthi
+│   ├── tag_allocator.py        # Rishika Naha
 │   ├── shared_cost.py          # Keerthi
 │   ├── nec_model.py            # Keerthi
-│   ├── untagged_heuristic.py   # Co-author
-│   └── untagged_ml.py          # Co-author (optional)
+│   ├── untagged_heuristic.py   # Rishika Naha
+│   └── untagged_ml.py          # Rishika Naha/ Keerthi (optional)
 │
 ├── dashboard/
 │   ├── app.py                  # Streamlit entrypoint
@@ -411,7 +410,7 @@ multicloud-finops-framework/
 
 ---
 
-## 9. Research Paper Outline
+## 9. Research Paper Outline (note: finops basics, cost optimization basics, multi cloud cost management deepen)
 
 **Title:** A Scalable Framework for Multi-Cloud Cost Allocation Using Data Engineering Principles
 
@@ -473,7 +472,7 @@ multicloud-finops-framework/
 
 ---
 
-## 10. Work Division
+## 10. Work Division (comment: change this based on re-arrangement of work prior, azure,gcp and aws for both of us. divide based on functionality like nec/ri, Untagged heuristic engine)
 
 ### Keerthi (You)
 
@@ -493,7 +492,7 @@ multicloud-finops-framework/
 
 ---
 
-### Co-author
+### Rishika Naha
 
 **Primary cloud:** AWS + GCP  
 **Core strength:** AWS, GCP, ML
@@ -524,7 +523,7 @@ multicloud-finops-framework/
 
 ---
 
-## 11. Task Plan & Milestones
+## 11. Task Plan & Milestones (comment: rearrange)
 
 > **Tracking:** Use GitHub Projects → Board view. One Issue per task. Labels: `aws`, `azure`, `gcp`, `paper`, `infra`, `engine`, `dashboard`.
 
@@ -533,35 +532,35 @@ multicloud-finops-framework/
 - [ ] Create GitHub repo + branch strategy (`main`, `dev`, feature branches)
 - [ ] Agree on and document CAS schema (this doc, Section 5)
 - [ ] Set up DuckDB + dbt project skeleton
-- [ ] Generate synthetic AWS CUR data (Co-author)
+- [ ] Generate synthetic AWS CUR data (Rishika Naha)
 - [ ] Generate synthetic Azure Cost Export data (Keerthi)
-- [ ] Generate synthetic GCP Billing Export data (Co-author)
+- [ ] Generate synthetic GCP Billing Export data (Rishika Naha)
 - [ ] Azure → CAS staging model (Keerthi)
-- [ ] AWS → CAS staging model (Co-author)
+- [ ] AWS → CAS staging model (Rishika Naha)
 
 ### Phase 2 — Core Engine (Weeks 3–4)
 
-- [ ] GCP → CAS staging model (Co-author)
+- [ ] GCP → CAS staging model (Rishika Naha)
 - [ ] `int_unified_billing.sql` — unified UNION ALL model (Both)
 - [ ] NEC / RI amortization module (Keerthi)
 - [ ] Shared cost distribution engine (Keerthi)
 - [ ] Tag-based allocation module (Keerthi)
-- [ ] Untagged heuristic attribution (Co-author)
-- [ ] ML classifier for untagged (Co-author — optional)
+- [ ] Untagged heuristic attribution (Rishika Naha)
+- [ ] ML classifier for untagged (Rishika Naha — optional)
 - [ ] Unit tests for all modules
 
 ### Phase 3 — Demo + Paper (Weeks 5–6)
 
 - [ ] Streamlit dashboard — Overview + Team Allocation pages (Keerthi)
 - [ ] Streamlit dashboard — Tagging + Shared + Untagged pages (Keerthi)
-- [ ] GitHub Actions: CI pipeline (run tests on push) (Co-author)
-- [ ] GitHub Actions: pipeline run (weekly schedule) (Co-author)
+- [ ] GitHub Actions: CI pipeline (run tests on push) (Rishika Naha)
+- [ ] GitHub Actions: pipeline run (weekly schedule) (Rishika Naha)
 - [ ] Paper: Section 3 — Schema design (Keerthi)
 - [ ] Paper: Section 4 — Allocation strategies (Keerthi)
 - [ ] Paper: Section 5 — NEC modeling (Keerthi)
-- [ ] Paper: Section 2 — Background (Co-author)
-- [ ] Paper: Section 6 — Untagged attribution (Co-author)
-- [ ] Paper: Section 7 — Implementation & evaluation (Co-author)
+- [ ] Paper: Section 2 — Background (Rishika Naha)
+- [ ] Paper: Section 6 — Untagged attribution (Rishika Naha)
+- [ ] Paper: Section 7 — Implementation & evaluation (Rishika Naha)
 - [ ] Paper: Intro + Conclusion (Both)
 - [ ] Cross-review all paper sections
 - [ ] Post arXiv preprint
@@ -577,7 +576,7 @@ infra      (gray)
 engine     (yellow)
 dashboard  (green)
 keerthi    (pink)
-co-author  (light blue)
+Rishika Naha  (light blue)
 ```
 
 ---
@@ -590,7 +589,7 @@ co-author  (light blue)
 | Real billing data | Never commit real billing data to the repo. Use synthetic data only. |
 | Scope creep | Do not add LangGraph/LangChain unless a specific NL feature is agreed upon. |
 | PySpark | Not in demo. Mention as enterprise scale-out path in the paper only. |
-| Cloud preference | Azure-first for Keerthi's modules. AWS+GCP-first for co-author's. No hard rules otherwise. |
+| Cloud preference | Azure-first for Keerthi's modules. AWS+GCP-first for Rishika Naha's. No hard rules otherwise. |
 | AI use | Claude (VS Code integration) is acceptable for code + paper writing. Document usage in paper methodology. |
 | Paper scope | One unified framework paper (Option 1). Do not split into three separate papers. |
 
