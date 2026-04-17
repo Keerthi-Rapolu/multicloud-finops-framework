@@ -1,0 +1,28 @@
+name: 'multicloud_finops'
+version: '1.0.0'
+config-version: 2
+
+profile: 'multicloud_finops'
+
+model-paths:   ["models"]
+seed-paths:    ["seeds"]
+macro-paths:   ["macros"]
+target-path:   "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Path to repo data/ folder, relative to dbt_project/
+  # Override: dbt run --vars '{"data_root": "/abs/path/to/data"}'
+  data_root: "../data"
+
+models:
+  multicloud_finops:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: table
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts

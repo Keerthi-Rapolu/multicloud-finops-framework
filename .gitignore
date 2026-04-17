@@ -1,0 +1,37 @@
+# Real billing data — never commit
+data/raw/
+
+# DuckDB database files
+*.duckdb
+*.duckdb.wal
+
+# dbt profiles (may contain credentials)
+dbt_project/profiles.yml
+
+# dbt build artifacts
+dbt_project/target/
+dbt_project/logs/
+dbt_project/.user.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,26 @@
+version: 2
+
+sources:
+  - name: raw_aws
+    description: "AWS Cost and Usage Report — raw Parquet files from ingestion layer"
+    tables:
+      - name: cur
+        description: "Hourly-grain CUR records for all accounts"
+        meta:
+          external_location: "read_parquet('{{ var('data_root') }}/raw/aws/**/*.parquet')"
+
+  - name: raw_azure
+    description: "Azure Cost Management Export (amortized) — raw Parquet files"
+    tables:
+      - name: cost
+        description: "Daily-grain amortized cost records for all subscriptions"
+        meta:
+          external_location: "read_parquet('{{ var('data_root') }}/raw/azure/**/*.parquet')"
+
+  - name: raw_gcp
+    description: "GCP Billing Detailed Usage Export — raw Parquet files"
+    tables:
+      - name: billing
+        description: "Hourly-grain billing records per resource per project"
+        meta:
+          external_location: "read_parquet('{{ var('data_root') }}/raw/gcp/**/*.parquet')"
