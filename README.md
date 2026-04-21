@@ -18,7 +18,7 @@ Modern enterprises run workloads across multiple cloud providers simultaneously.
 | **Shared infrastructure** | Networking, logging, and security costs have no direct owner and inflate team budgets arbitrarily |
 | **No open-source standard** | Existing tools (CloudHealth, Apptio) are closed-source and expensive |
 
-This framework solves all of the above with a reproducible, SQL-first pipeline that runs entirely on your laptop or GitHub Actions free tier.
+This framework addresses these gaps with a reproducible, SQL-first pipeline that runs entirely on your laptop or GitHub Actions free tier.
 
 ---
 
@@ -241,8 +241,10 @@ multicloud-finops-framework/
 │       └── 05_untagged_resources.py
 │
 ├── tests/
-│   ├── test_nec_model.py
-│   └── test_shared_cost.py
+│   ├── test_nec_model.py       # NEC aggregation, waste, utilization
+│   ├── test_shared_cost.py     # proportional / even / weighted strategies
+│   ├── test_normalization.py   # ingestion schema validation per cloud
+│   └── test_untagged.py        # heuristic rule engine + coverage metrics
 │
 ├── docs/                       # MkDocs source → GitHub Pages
 │   ├── index.md
@@ -319,6 +321,77 @@ Alternatively, connect via **SQLTools + DuckDB Sql Tools** in VS Code — point 
 
 ---
 
+## Sample Output
+
+**Spend by cloud and service category** (`fct_unified_billing`):
+
+| cloud_provider | service_category | rows  | total_nec  |
+|----------------|-----------------|------:|-----------:|
+| aws            | Compute         | 8,412 | $18,243.60 |
+| aws            | Storage         | 3,201 | $2,104.80  |
+| aws            | Database        | 1,890 | $4,310.20  |
+| azure          | Compute         | 6,038 | $14,092.40 |
+| azure          | Storage         | 2,540 | $1,876.30  |
+| gcp            | Compute         | 5,114 | $11,405.90 |
+| gcp            | Analytics       | 2,203 | $3,211.70  |
+
+**NEC vs list cost — savings from commitments**:
+
+| cloud_provider | discount_type | list_cost   | nec         | savings    |
+|----------------|--------------|------------:|------------:|-----------:|
+| aws            | ri           | $12,400.00  | $8,680.00   | $3,720.00  |
+| aws            | sp           | $6,200.00   | $4,712.00   | $1,488.00  |
+| aws            | on_demand    | $8,100.00   | $8,100.00   | $0.00      |
+| azure          | ri           | $9,800.00   | $7,056.00   | $2,744.00  |
+| gcp            | on_demand    | $11,405.90  | $9,635.90   | $1,770.00  |
+
+**Per-team allocated NEC** (proportional shared-cost distribution):
+
+| allocated_team | cloud_provider | allocated_nec | is_shared_cost |
+|----------------|---------------|-------------:|----------------|
+| platform       | aws           | $9,140.30    | false          |
+| data-eng       | aws           | $6,820.10    | false          |
+| platform       | azure         | $5,210.40    | true           |
+| frontend       | gcp           | $3,880.20    | false          |
+
+> These figures are from the `normal` synthetic scenario (15% untagged, 20% RI, 15% SP). Run `make pipeline` to reproduce them locally.
+
+---
+
+## Dashboard
+
+The Streamlit dashboard has 5 pages — run it with `make dashboard` after `make dbt`:
+
+| Page | What it shows |
+|---|---|
+| **Overview** | Total spend by cloud, month-over-month trend, NEC vs list cost savings |
+| **Team Allocation** | Per-team NEC table, RI/SP utilization, shared cost breakdown |
+| **Tagging Coverage** | % tagged by cloud, service, and account — identifies attribution gaps |
+| **Shared Costs** | Distribution of shared infra costs across teams by strategy |
+| **Untagged Resources** | Heuristic attribution confidence scores, unresolved rows |
+
+> GitHub README does not support embedded interactive content. To try the live dashboard, run `make demo` locally or deploy the `dashboard/` folder to [Streamlit Community Cloud](https://streamlit.io/cloud) for free.
+
+---
+
+## Scope and Limitations
+
+This version is a **local, synthetic-data reference implementation**. It is designed to demonstrate the framework architecture and allocation methodology, not to be plugged directly into a production billing pipeline.
+
+| Limitation | Detail |
+|---|---|
+| **Synthetic data only** | All billing data is generated — no real AWS/Azure/GCP credentials required or used |
+| **Local execution** | Pipeline runs on DuckDB in-process; production scale-out requires replacing DuckDB with Apache Spark |
+| **Batch only** | No real-time streaming — ingestion is triggered manually or on a weekly GitHub Actions schedule |
+| **GCP waste detection** | Relies on `is_unused_reservation` system label, which is only available in the Detailed Usage Export (not Standard Export) |
+| **ML classifier** | Requires sufficient tagged rows as training data; degrades at very low tagging coverage (< 20%) |
+| **No auth / secrets handling** | Production deployments would need cloud credential management (IAM roles, Workload Identity, etc.) |
+| **Azure shared-cost spreading** | Currently done in the dbt intermediate layer; AWS and GCP pass through `tag_team` as-is |
+
+**Future work:** real-time streaming ingestion, PySpark adapter for >50GB datasets, NL query interface over the mart (potential LangGraph integration), cross-cloud RI arbitrage analysis.
+
+---
+
 ## Research Paper
 
 This framework accompanies a research paper submitted to arXiv / IEEE CLOUD:
@@ -334,9 +407,13 @@ Key contributions documented in the paper:
 
 ---
 
-## CI Status
+## CI
 
-Tests run automatically on every push to `main` and `dev` via GitHub Actions (Python 3.11, Ubuntu).
+On every push to `main` or `dev`, GitHub Actions runs:
+1. `pytest tests/ -v` — unit tests for NEC model, shared cost, normalization, untagged attribution
+2. `python load_synthetic.py --month 2026-03 --force` — smoke test: generate and validate all three clouds
+3. `dbt run` — materialize all Bronze / Silver / Gold models
+4. `dbt test` — run dbt schema tests against the mart
 
 ---
 

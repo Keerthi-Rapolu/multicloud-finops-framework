@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "multicloud-finops-framework"
+version = "1.0.0"
+description = "Open-source framework for normalizing, allocating, and visualizing cloud costs across AWS, Azure, and GCP"
+authors = [
+    { name = "Keerthi Rapolu", email = "keerthiofrapolu@gmail.com" },
+    { name = "Rishika Naha" },
+]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["finops", "cloud-cost", "aws", "azure", "gcp", "dbt", "duckdb", "cost-allocation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = [
+    "duckdb>=0.10",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "pyyaml>=6.0",
+    "dbt-duckdb>=1.7",
+    "streamlit>=1.32",
+    "plotly>=5.20",
+]
+
+[project.optional-dependencies]
+ml = ["scikit-learn>=1.4"]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Repository = "https://github.com/Keerthi-Rapolu/multicloud-finops-framework"
+Documentation = "https://keerthi-rapolu.github.io/multicloud-finops-framework"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.setuptools.packages.find]
+include = ["allocation*", "ingestion*", "scripts*"]
