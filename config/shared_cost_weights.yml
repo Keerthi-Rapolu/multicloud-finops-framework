@@ -1,0 +1,54 @@
+# Shared cost distribution configuration
+#
+# Strategies:
+#   proportional — team_share = team_direct_nec / total_direct_nec  (default)
+#   even         — team_share = 1 / N  (equal regardless of team size)
+#   weighted     — team_share = team_weight / sum(weights)  (contractual SLA-driven)
+#
+# Shared service rows are identified by service_name. Any row whose service_name
+# appears here AND whose is_tagged = false is treated as a shared cost candidate.
+
+default_strategy: proportional
+
+teams:
+  - platform
+  - data-eng
+  - frontend
+  - backend
+  - ml
+
+# Used only when strategy: weighted.
+# Values are normalized to sum to 1.0 automatically.
+weights:
+  platform: 0.30
+  data-eng: 0.25
+  frontend: 0.20
+  backend: 0.15
+  ml: 0.10
+
+shared_services:
+  - name: networking
+    strategy: proportional
+    service_names:
+      - AmazonVPC
+      - Virtual Network
+      - Azure Firewall
+      - Cloud VPN
+      - Cloud NAT
+
+  - name: logging_monitoring
+    strategy: even
+    service_names:
+      - AWSCloudTrail
+      - AmazonCloudWatch
+      - Azure Monitor
+      - Cloud Logging
+      - Cloud Monitoring
+
+  - name: security
+    strategy: even
+    service_names:
+      - AWSSecurityHub
+      - Microsoft Defender for Cloud
+      - Cloud Armor
+      - Cloud Security Command Center

@@ -11,9 +11,9 @@ target-path:   "target"
 clean-targets: ["target", "dbt_packages"]
 
 vars:
-  # Path to repo data/ folder, relative to dbt_project/
-  # Override: dbt run --vars '{"data_root": "/abs/path/to/data"}'
-  data_root: "../data"
+  # Absolute path to repo data/ folder.
+  # Override per-machine: dbt run --vars '{"data_root": "/your/path/to/data"}'
+  data_root: "C:/Users/rapol/Downloads/multicloud-finops-framework/data"
 
 models:
   multicloud_finops:

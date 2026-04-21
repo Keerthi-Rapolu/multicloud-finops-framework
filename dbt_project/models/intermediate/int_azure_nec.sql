@@ -1,63 +1,201 @@
 /*
   int_azure_nec — Azure Net Effective Cost
 
-  Azure Cost Management exports the *amortized* view — RI and Savings Plan
-  upfront fees are already spread daily across the commitment term.
-  So NEC = list_cost with no further adjustment needed.
+  Three things this model does that staging does not:
 
-  has_commitment flag identifies RI/SP-covered rows (BenefitName populated).
-  discount_type is derived from benefit_name content.
+  1. NEC breakdown
+       nec_used  = amortized cost of resources that actually ran
+       nec_waste = amortized cost of unused RI/SP capacity (ChargeType = Unused*)
+       nec       = nec_used only (waste shown separately, not double-counted)
+       effective_unit_price = nec_used / usage_amount — true per-unit cost after discounts
+
+  2. Shared cost spreading
+       Resources in the shared-infra subscription (no team tag) are fanned out
+       into one row per benefiting team, each carrying 1/N of the cost.
+       Subscription → teams mapping is maintained in the sub_teams CTE.
+
+  3. Untagged Usage rows within team-owned subscriptions
+       Same fan-out logic: split across all teams that share that subscription.
 */
 
 with staged as (
     select * from {{ ref('stg_azure_cost') }}
 ),
 
-nec as (
+-- Subscription → benefiting teams.
+-- For team-owned subs: one entry (only that team pays).
+-- For shared-infra sub: all 5 teams split equally.
+sub_teams(account_id, team) as (
+    values
+        ('a1b2c3d4-0001-0001-0001-000000000001', 'platform'),
+        ('a1b2c3d4-0002-0002-0002-000000000002', 'data-eng'),
+        ('a1b2c3d4-0003-0003-0003-000000000003', 'frontend'),
+        ('a1b2c3d4-0003-0003-0003-000000000003', 'backend'),
+        ('a1b2c3d4-0003-0003-0003-000000000003', 'ml'),
+        ('a1b2c3d4-9999-9999-9999-000000000099', 'platform'),
+        ('a1b2c3d4-9999-9999-9999-000000000099', 'data-eng'),
+        ('a1b2c3d4-9999-9999-9999-000000000099', 'frontend'),
+        ('a1b2c3d4-9999-9999-9999-000000000099', 'backend'),
+        ('a1b2c3d4-9999-9999-9999-000000000099', 'ml')
+),
+
+sub_team_counts as (
     select
-        -- Keys
         account_id,
-        account_name,
-        billing_month,
-        usage_date,
-        resource_id,
-        resource_group,
-        invoice_section,
-        product_name,
-        service_name,
-        service_subcategory,
-        meter_name,
-        region,
-        service_family,
-        usage_amount,
-        usage_unit,
-        unit_price,
-        currency,
+        team,
+        count(*) over (partition by account_id) as n_teams
+    from sub_teams
+),
 
-        -- Commitment identifiers
-        benefit_id,
-        benefit_name,
-        has_commitment,
+nec_base as (
+    select
+        *,
+        -- billed_cost = CostInBillingCurrency from amortized export = actual amortized cost.
+        -- retail_cost = payg_price × usage_amount = true OD baseline for savings calc.
+        -- NEC uses billed_cost (what you actually pay), not retail_cost.
+        case when is_commitment_waste then 0.0
+             else coalesce(billed_cost, 0.0) end                            as nec_used,
+        case when is_commitment_waste then coalesce(billed_cost, 0.0)
+             else 0.0 end                                                   as nec_waste,
 
-        -- Discount type label
+        -- Effective unit price: amortized cost per unit (null for waste rows where usage_amount = 0)
+        -- NULLIF guard prevents division-by-zero on UnusedReservation / UnusedSavingsPlan rows.
         case
-            when benefit_name ilike '%Reserved%' then 'ri'
-            when benefit_name ilike '%savings plan%' then 'sp'
-            else 'on_demand'
-        end                                         as discount_type,
+            when not is_commitment_waste
+            then billed_cost / nullif(usage_amount, 0)
+            else null
+        end                                                                 as effective_unit_price,
 
-        -- NEC: amortized cost is already net effective for Azure
-        coalesce(list_cost, 0.0)                    as nec,
-        list_cost,
-
-        -- Tags
-        tag_team,
-        tag_environment,
-        tag_cost_center,
-        is_tagged,
-        cloud_provider
-
+        -- pricing_model is a clean enum from staging; more reliable than benefit_name string matching
+        case
+            when pricing_model = 'Reservation'   then 'ri'
+            when pricing_model = 'SavingsPlan'   then 'sp'
+            else                                      'on_demand'
+        end                                                                 as discount_type
     from staged
+),
+
+-- Tagged rows pass through unchanged
+tagged as (
+    select
+        nb.*,
+        nb.tag_team         as allocated_team,
+        nb.nec_used         as allocated_nec,
+        nb.nec_waste        as allocated_nec_waste,
+        1                   as allocation_n_teams,
+        false               as is_shared_cost
+    from nec_base nb
+    where nb.is_tagged = true
+),
+
+-- Untagged rows fan out: one row per team in the subscription.
+-- LEFT JOIN so untagged rows from unknown subscriptions surface as allocated_team = NULL
+-- rather than being silently dropped (inner join data loss).
+-- nec_used, nec_waste, and retail_cost are divided by n_teams so that cloud-level
+-- aggregations (nec_by_cloud, etc.) sum correctly — N fan-out rows × (value/N) = value.
+-- allocated_nec / allocated_nec_waste carry the same divided values for team reporting.
+untagged_fanout as (
+    select
+        nb.* exclude (nec_used, nec_waste, retail_cost),
+        nb.nec_used    / coalesce(stc.n_teams, 1)      as nec_used,
+        nb.nec_waste   / coalesce(stc.n_teams, 1)      as nec_waste,
+        nb.retail_cost / coalesce(stc.n_teams, 1)      as retail_cost,
+        stc.team                                        as allocated_team,
+        nb.nec_used  / coalesce(stc.n_teams, 1)        as allocated_nec,
+        nb.nec_waste / coalesce(stc.n_teams, 1)        as allocated_nec_waste,
+        coalesce(stc.n_teams, 1)                        as allocation_n_teams,
+        stc.team is not null                            as is_shared_cost
+    from nec_base nb
+    left join sub_team_counts stc on nb.account_id = stc.account_id
+    where nb.is_tagged = false
 )
 
-select * from nec
+select
+    billing_account_id,
+    account_id,
+    account_name,
+    billing_month,
+    usage_date,
+    resource_id,
+    resource_name,
+    resource_group,
+    invoice_section,
+    product_name,
+    service_name,
+    service_subcategory,
+    meter_name,
+    region,
+    service_family,
+    charge_type,
+    vcpus,
+    usage_amount,
+    usage_unit,
+    unit_price,
+    currency,
+    benefit_id,
+    benefit_name,
+    has_commitment,
+    is_commitment_waste,
+    discount_type,
+    billed_cost,
+    retail_cost,
+    nec_used,
+    allocated_nec_waste     as nec_waste,
+    nec_used                as nec,
+    effective_unit_price,
+    tag_team,
+    tag_environment,
+    tag_cost_center,
+    is_tagged,
+    allocated_team,
+    allocated_nec,
+    allocation_n_teams,
+    is_shared_cost,
+    cloud_provider
+from tagged
+
+union all
+
+select
+    billing_account_id,
+    account_id,
+    account_name,
+    billing_month,
+    usage_date,
+    resource_id,
+    resource_name,
+    resource_group,
+    invoice_section,
+    product_name,
+    service_name,
+    service_subcategory,
+    meter_name,
+    region,
+    service_family,
+    charge_type,
+    vcpus,
+    usage_amount,
+    usage_unit,
+    unit_price,
+    currency,
+    benefit_id,
+    benefit_name,
+    has_commitment,
+    is_commitment_waste,
+    discount_type,
+    billed_cost,
+    retail_cost,
+    nec_used,
+    allocated_nec_waste     as nec_waste,
+    nec_used                as nec,
+    effective_unit_price,
+    tag_team,
+    tag_environment,
+    tag_cost_center,
+    is_tagged,
+    allocated_team,
+    allocated_nec,
+    allocation_n_teams,
+    is_shared_cost,
+    cloud_provider
+from untagged_fanout

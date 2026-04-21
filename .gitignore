@@ -25,6 +25,12 @@ build/
 # Jupyter
 .ipynb_checkpoints/
 
+# Pytest
+.pytest_cache/
+
+# VSCode session files
+*.session.sql
+
 # Streamlit
 .streamlit/
 

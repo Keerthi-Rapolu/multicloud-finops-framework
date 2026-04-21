@@ -3,7 +3,9 @@
 
   Reads raw amortized Parquet files, casts types, parses Tags JSON,
   extracts tag columns, renames to snake_case.
-  Does NOT compute NEC — already amortized at source; int_azure_nec adds context.
+
+  Passes through UnusedReservation / UnusedSavingsPlan rows so int_azure_nec
+  can separate used cost from commitment waste and compute true NEC.
 */
 
 with source as (
@@ -12,9 +14,11 @@ with source as (
 
 staged as (
     select
-        -- Identity
+        -- Identity / billing hierarchy
+        nullif(BillingAccountId, '')                                            as billing_account_id,
         SubscriptionId                                                          as account_id,
         SubscriptionName                                                        as account_name,
+        nullif(AccountOwnerId,   '')                                            as account_owner_id,
         InvoiceSectionName                                                      as invoice_section,
         ResourceGroup                                                           as resource_group,
 
@@ -24,6 +28,8 @@ staged as (
 
         -- Resource
         ResourceId                                                              as resource_id,
+        nullif(trim(ResourceName), '')                                          as resource_name,
+        nullif(trim(ConsumedService), '')                                       as consumed_service,
         ProductName                                                             as product_name,
         MeterCategory                                                           as service_name,
         MeterSubcategory                                                        as service_subcategory,
@@ -34,14 +40,31 @@ staged as (
         ChargeType                                                              as charge_type,
         PublisherType                                                           as publisher_type,
 
+        -- vCPUs from AdditionalInfo JSON (VMs only; null for storage/SQL/shared)
+        try_cast(nullif(trim(json_extract_string(AdditionalInfo, '$.vCPUs')), '') as integer) as vcpus,
+
         -- Usage
         try_cast(Quantity   as double)                                          as usage_amount,
         Unit                                                                    as usage_unit,
         try_cast(UnitPrice  as double)                                          as unit_price,
         BillingCurrency                                                         as currency,
 
-        -- Cost (amortized — RI/SP upfront already spread daily)
-        try_cast(CostInBillingCurrency as double)                               as list_cost,
+        -- Cost: CostInBillingCurrency from the AMORTIZED export.
+        -- This is the actual amortized daily cost — NOT the retail/OD price.
+        -- For RI/SP Usage rows: this is the amortized commitment slice (less than OD).
+        -- For UnusedReservation/SP rows: this is the waste cost (no usage, cost > 0).
+        -- Retail equivalent (true OD price) = payg_price × usage_amount — see below.
+        try_cast(CostInBillingCurrency as double)                               as billed_cost,
+
+        -- Retail cost: what this usage would cost at full on-demand (PAYG) rates.
+        -- Use this as list_cost for savings calculations vs OD baseline.
+        -- Null for UnusedReservation/SP rows where payg_price may not apply.
+        try_cast(PayGPrice as double) * try_cast(Quantity as double)            as retail_cost,
+
+        -- Pricing model and effective vs list price
+        nullif(trim(PricingModel), '')                                          as pricing_model,
+        try_cast(EffectivePrice as double)                                      as effective_price,
+        try_cast(PayGPrice      as double)                                      as payg_price,
 
         -- Commitment / RI / SP
         nullif(BenefitId,   '')                                                 as benefit_id,
@@ -49,6 +72,12 @@ staged as (
         case
             when nullif(BenefitName, '') is not null then true else false
         end                                                                     as has_commitment,
+
+        -- Waste flag: UnusedReservation / UnusedSavingsPlan rows cost money but ran nothing
+        case
+            when ChargeType in ('UnusedReservation', 'UnusedSavingsPlan')
+            then true else false
+        end                                                                     as is_commitment_waste,
 
         -- Tags — parsed from JSON blob
         -- Azure Tags format: {"team": "platform", "environment": "prod", ...}
@@ -66,7 +95,7 @@ staged as (
         'azure'                                                                 as cloud_provider
 
     from source
-    where ChargeType = 'Usage'
+    where ChargeType in ('Usage', 'UnusedReservation', 'UnusedSavingsPlan')
 )
 
 select * from staged

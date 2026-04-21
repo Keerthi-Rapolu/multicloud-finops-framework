@@ -19,19 +19,23 @@ random.seed(42)
 # Resource catalog — fixed set of "real" resources in the account
 # ---------------------------------------------------------------------------
 INSTANCE_TYPES = {
-    "t3.micro":   {"od_rate": 0.0104,  "norm": 0.5},
-    "t3.small":   {"od_rate": 0.0208,  "norm": 1.0},
-    "t3.medium":  {"od_rate": 0.0416,  "norm": 2.0},
-    "t3.large":   {"od_rate": 0.0832,  "norm": 4.0},
-    "t3.xlarge":  {"od_rate": 0.1664,  "norm": 8.0},
-    "m5.large":   {"od_rate": 0.0960,  "norm": 4.0},
-    "m5.xlarge":  {"od_rate": 0.1920,  "norm": 8.0},
-    "m5.2xlarge": {"od_rate": 0.3840,  "norm": 16.0},
-    "c5.large":   {"od_rate": 0.0850,  "norm": 4.0},
-    "c5.xlarge":  {"od_rate": 0.1700,  "norm": 8.0},
-    "r5.large":   {"od_rate": 0.1260,  "norm": 4.0},
-    "r5.xlarge":  {"od_rate": 0.2520,  "norm": 8.0},
+    #              od_rate   norm  vcpu  memory
+    "t3.micro":   {"od_rate": 0.0104,  "norm": 0.5,  "vcpu": 2,  "memory": "1 GiB"},
+    "t3.small":   {"od_rate": 0.0208,  "norm": 1.0,  "vcpu": 2,  "memory": "2 GiB"},
+    "t3.medium":  {"od_rate": 0.0416,  "norm": 2.0,  "vcpu": 2,  "memory": "4 GiB"},
+    "t3.large":   {"od_rate": 0.0832,  "norm": 4.0,  "vcpu": 2,  "memory": "8 GiB"},
+    "t3.xlarge":  {"od_rate": 0.1664,  "norm": 8.0,  "vcpu": 4,  "memory": "16 GiB"},
+    "m5.large":   {"od_rate": 0.0960,  "norm": 4.0,  "vcpu": 2,  "memory": "8 GiB"},
+    "m5.xlarge":  {"od_rate": 0.1920,  "norm": 8.0,  "vcpu": 4,  "memory": "16 GiB"},
+    "m5.2xlarge": {"od_rate": 0.3840,  "norm": 16.0, "vcpu": 8,  "memory": "32 GiB"},
+    "c5.large":   {"od_rate": 0.0850,  "norm": 4.0,  "vcpu": 2,  "memory": "4 GiB"},
+    "c5.xlarge":  {"od_rate": 0.1700,  "norm": 8.0,  "vcpu": 4,  "memory": "8 GiB"},
+    "r5.large":   {"od_rate": 0.1260,  "norm": 4.0,  "vcpu": 2,  "memory": "16 GiB"},
+    "r5.xlarge":  {"od_rate": 0.2520,  "norm": 8.0,  "vcpu": 4,  "memory": "32 GiB"},
 }
+
+# Payer account for all member accounts (simulates AWS Org consolidated billing)
+PAYER_ACCOUNT = "112233445566"
 
 ACCOUNTS = {
     "112233445566": "platform-prod",
@@ -133,6 +137,35 @@ def build_resources(cfg: GeneratorConfig) -> list[dict]:
             "storage_gb": gb,
         })
 
+    # Shared infra — always untagged (no team owner); picked up by shared_cost.py
+    resources.append({
+        "type": "vpc_nat",
+        "resource_id": f"arn:aws:ec2:us-east-1:{PAYER_ACCOUNT}:natgateway/nat-" + uuid.uuid4().hex[:17],
+        "account": PAYER_ACCOUNT,
+        "region": "us-east-1",
+        "team": None,
+        "env": "prod",
+        "od_rate": 0.045,          # $0.045/hr per NAT gateway
+    })
+    resources.append({
+        "type": "vpc_vpn",
+        "resource_id": f"arn:aws:ec2:us-east-1:{PAYER_ACCOUNT}:vpn-connection/vpn-" + uuid.uuid4().hex[:8],
+        "account": PAYER_ACCOUNT,
+        "region": "us-east-1",
+        "team": None,
+        "env": "prod",
+        "od_rate": 0.05,           # $0.05/hr per VPN connection
+    })
+    resources.append({
+        "type": "cloudtrail",
+        "resource_id": f"arn:aws:cloudtrail:us-east-1:{PAYER_ACCOUNT}:trail/org-trail",
+        "account": PAYER_ACCOUNT,
+        "region": "us-east-1",
+        "team": None,
+        "env": "prod",
+        "od_rate": 0.10,           # ~$0.10/hr equiv for org-level trail events
+    })
+
     # RDS instances
     rds_specs = [
         ("db.t3.medium",  "platform-db",  "platform", "prod",    "112233445566", "us-east-1", 0.068),
@@ -179,9 +212,11 @@ def ec2_row(res: dict, hour_start: datetime, billing_start: str, billing_end: st
     region_pfx = region.replace("-", "").upper()[:4]  # e.g. USE1
     usage_type = f"{region_pfx}-BoxUsage:{itype}"
 
+    specs = INSTANCE_TYPES[itype]
     base = {
         "identity/LineItemId":              _line_item_id(),
         "identity/TimeInterval":            interval,
+        "bill/PayerAccountId":              PAYER_ACCOUNT,
         "bill/BillingPeriodStartDate":      billing_start,
         "bill/BillingPeriodEndDate":        billing_end,
         "bill/BillingEntity":               "AWS",
@@ -190,7 +225,7 @@ def ec2_row(res: dict, hour_start: datetime, billing_start: str, billing_end: st
         "lineItem/UsageStartDate":          hour_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "lineItem/UsageEndDate":            hour_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "lineItem/ProductCode":             "AmazonEC2",
-        "lineItem/UsageType":              usage_type,
+        "lineItem/UsageType":               usage_type,
         "lineItem/Operation":               "RunInstances",
         "lineItem/AvailabilityZone":        res["az"],
         "lineItem/ResourceId":              res["resource_id"],
@@ -206,20 +241,27 @@ def ec2_row(res: dict, hour_start: datetime, billing_start: str, billing_end: st
         "pricing/publicOnDemandCost":       round(od_rate, 6),
         "product/ProductName":              "Amazon Elastic Compute Cloud",
         "product/instanceType":             itype,
+        "product/vcpu":                     specs["vcpu"],
+        "product/memory":                   specs["memory"],
         "product/operatingSystem":          "Linux",
         "product/region":                   region,
         "product/servicecode":              "AmazonEC2",
         "resourceTags/user:Team":           team_tag,
         "resourceTags/user:Environment":    env_tag,
         "resourceTags/user:CostCenter":     cc_tag,
-        "reservation/ReservationARN":       "",
-        "reservation/EffectiveCost":        "",
-        "reservation/RecurringFeeForUsage": "",
-        "reservation/AmortizedUpfrontCostForUsage": "",
-        "savingsPlan/SavingsPlanARN":       "",
-        "savingsPlan/SavingsPlanEffectiveCost": "",
-        "savingsPlan/SavingsPlanRate":      "",
-        "savingsPlan/UsedCommitment":       "",
+        "reservation/ReservationARN":                        "",
+        "reservation/EffectiveCost":                         "",
+        "reservation/RecurringFeeForUsage":                  "",
+        "reservation/AmortizedUpfrontCostForUsage":          "",
+        "reservation/UnusedQuantity":                        "",
+        "reservation/UnusedAmortizedUpfrontFeeForBillingPeriod": "",
+        "reservation/UnusedRecurringFee":                    "",
+        "savingsPlan/SavingsPlanARN":                        "",
+        "savingsPlan/SavingsPlanEffectiveCost":              "",
+        "savingsPlan/SavingsPlanRate":                       "",
+        "savingsPlan/UsedCommitment":                        "",
+        "savingsPlan/TotalCommitmentToDate":                 "",
+        "savingsPlan/RecurringCommitmentForBillingPeriod":   "",
     }
 
     if discount == "on_demand":
@@ -273,6 +315,7 @@ def s3_row(res: dict, hour_start: datetime, billing_start: str, billing_end: str
     return {
         "identity/LineItemId":              _line_item_id(),
         "identity/TimeInterval":            interval,
+        "bill/PayerAccountId":              PAYER_ACCOUNT,
         "bill/BillingPeriodStartDate":      billing_start,
         "bill/BillingPeriodEndDate":        billing_end,
         "bill/BillingEntity":               "AWS",
@@ -297,20 +340,27 @@ def s3_row(res: dict, hour_start: datetime, billing_start: str, billing_end: str
         "pricing/publicOnDemandCost":       hourly_cost,
         "product/ProductName":              "Amazon Simple Storage Service",
         "product/instanceType":             "",
+        "product/vcpu":                     "",
+        "product/memory":                   "",
         "product/operatingSystem":          "",
         "product/region":                   region,
         "product/servicecode":              "AmazonS3",
         "resourceTags/user:Team":           team_tag,
         "resourceTags/user:Environment":    env_tag,
         "resourceTags/user:CostCenter":     cc_tag,
-        "reservation/ReservationARN":       "",
-        "reservation/EffectiveCost":        "",
-        "reservation/RecurringFeeForUsage": "",
-        "reservation/AmortizedUpfrontCostForUsage": "",
-        "savingsPlan/SavingsPlanARN":       "",
-        "savingsPlan/SavingsPlanEffectiveCost": "",
-        "savingsPlan/SavingsPlanRate":      "",
-        "savingsPlan/UsedCommitment":       "",
+        "reservation/ReservationARN":                        "",
+        "reservation/EffectiveCost":                         "",
+        "reservation/RecurringFeeForUsage":                  "",
+        "reservation/AmortizedUpfrontCostForUsage":          "",
+        "reservation/UnusedQuantity":                        "",
+        "reservation/UnusedAmortizedUpfrontFeeForBillingPeriod": "",
+        "reservation/UnusedRecurringFee":                    "",
+        "savingsPlan/SavingsPlanARN":                        "",
+        "savingsPlan/SavingsPlanEffectiveCost":              "",
+        "savingsPlan/SavingsPlanRate":                       "",
+        "savingsPlan/UsedCommitment":                        "",
+        "savingsPlan/TotalCommitmentToDate":                 "",
+        "savingsPlan/RecurringCommitmentForBillingPeriod":   "",
     }
 
 
@@ -327,6 +377,7 @@ def rds_row(res: dict, hour_start: datetime, billing_start: str, billing_end: st
     return {
         "identity/LineItemId":              _line_item_id(),
         "identity/TimeInterval":            interval,
+        "bill/PayerAccountId":              PAYER_ACCOUNT,
         "bill/BillingPeriodStartDate":      billing_start,
         "bill/BillingPeriodEndDate":        billing_end,
         "bill/BillingEntity":               "AWS",
@@ -351,20 +402,225 @@ def rds_row(res: dict, hour_start: datetime, billing_start: str, billing_end: st
         "pricing/publicOnDemandCost":       round(od_rate, 6),
         "product/ProductName":              "Amazon Relational Database Service",
         "product/instanceType":             itype,
+        "product/vcpu":                     "",
+        "product/memory":                   "",
         "product/operatingSystem":          "",
         "product/region":                   region,
         "product/servicecode":              "AmazonRDS",
         "resourceTags/user:Team":           team_tag,
         "resourceTags/user:Environment":    env_tag,
         "resourceTags/user:CostCenter":     cc_tag,
-        "reservation/ReservationARN":       "",
-        "reservation/EffectiveCost":        "",
-        "reservation/RecurringFeeForUsage": "",
-        "reservation/AmortizedUpfrontCostForUsage": "",
-        "savingsPlan/SavingsPlanARN":       "",
-        "savingsPlan/SavingsPlanEffectiveCost": "",
-        "savingsPlan/SavingsPlanRate":      "",
-        "savingsPlan/UsedCommitment":       "",
+        "reservation/ReservationARN":                        "",
+        "reservation/EffectiveCost":                         "",
+        "reservation/RecurringFeeForUsage":                  "",
+        "reservation/AmortizedUpfrontCostForUsage":          "",
+        "reservation/UnusedQuantity":                        "",
+        "reservation/UnusedAmortizedUpfrontFeeForBillingPeriod": "",
+        "reservation/UnusedRecurringFee":                    "",
+        "savingsPlan/SavingsPlanARN":                        "",
+        "savingsPlan/SavingsPlanEffectiveCost":              "",
+        "savingsPlan/SavingsPlanRate":                       "",
+        "savingsPlan/UsedCommitment":                        "",
+        "savingsPlan/TotalCommitmentToDate":                 "",
+        "savingsPlan/RecurringCommitmentForBillingPeriod":   "",
+    }
+
+
+def ri_fee_row(res: dict, billing_start: str, billing_end: str,
+               amortized_rate: float, total_hours: int) -> dict:
+    """
+    Monthly RIFee row — one per RI-covered resource per billing period.
+    Carries unused RI capacity: hours reserved but never consumed.
+    unused_qty ~ 10–25% of total reserved hours (realistic underutilisation).
+    """
+    rng_local   = random.Random(hash(res["resource_id"]) & 0xFFFFFFFF)
+    unused_frac = rng_local.uniform(0.10, 0.25)
+    unused_qty  = round(total_hours * unused_frac, 2)
+    upfront_per_hr  = amortized_rate * 0.15   # 15% of amortized = upfront portion
+    recurring_per_hr = amortized_rate * 0.85  # 85% = recurring portion
+    itype   = res["instance_type"]
+    account = res["account"]
+    region  = res["region"]
+    team_tag, env_tag, cc_tag = _tags(res.get("team"), res["env"])
+    region_pfx = region.replace("-", "").upper()[:4]
+    specs   = INSTANCE_TYPES[itype]
+
+    return {
+        "identity/LineItemId":              _line_item_id(),
+        "identity/TimeInterval":            f"{billing_start}/{billing_end}",
+        "bill/PayerAccountId":              PAYER_ACCOUNT,
+        "bill/BillingPeriodStartDate":      billing_start,
+        "bill/BillingPeriodEndDate":        billing_end,
+        "bill/BillingEntity":               "AWS",
+        "lineItem/UsageAccountId":          account,
+        "lineItem/LineItemType":            "RIFee",
+        "lineItem/UsageStartDate":          billing_start,
+        "lineItem/UsageEndDate":            billing_end,
+        "lineItem/ProductCode":             "AmazonEC2",
+        "lineItem/UsageType":               f"{region_pfx}-HeavyUsage:{itype}",
+        "lineItem/Operation":               "RunInstances",
+        "lineItem/AvailabilityZone":        res.get("az", ""),
+        "lineItem/ResourceId":              res["resource_id"],
+        "lineItem/UsageAmount":             float(total_hours),
+        "lineItem/NormalizationFactor":     specs["norm"],
+        "lineItem/NormalizedUsageAmount":   specs["norm"] * total_hours,
+        "lineItem/UnblendedRate":           0.0,
+        "lineItem/UnblendedCost":           0.0,
+        "lineItem/BlendedRate":             round(amortized_rate, 6),
+        "lineItem/BlendedCost":             round(amortized_rate * total_hours, 6),
+        "pricing/unit":                     "Hrs",
+        "pricing/publicOnDemandRate":       round(res["od_rate"], 6),
+        "pricing/publicOnDemandCost":       round(res["od_rate"] * total_hours, 6),
+        "product/ProductName":              "Amazon Elastic Compute Cloud",
+        "product/instanceType":             itype,
+        "product/vcpu":                     specs["vcpu"],
+        "product/memory":                   specs["memory"],
+        "product/operatingSystem":          "Linux",
+        "product/region":                   region,
+        "product/servicecode":              "AmazonEC2",
+        "resourceTags/user:Team":           team_tag,
+        "resourceTags/user:Environment":    env_tag,
+        "resourceTags/user:CostCenter":     cc_tag,
+        "reservation/ReservationARN":                        res["ri_arn"],
+        "reservation/EffectiveCost":                         round(amortized_rate * total_hours, 6),
+        "reservation/RecurringFeeForUsage":                  round(recurring_per_hr * total_hours, 6),
+        "reservation/AmortizedUpfrontCostForUsage":          round(upfront_per_hr * total_hours, 6),
+        "reservation/UnusedQuantity":                        unused_qty,
+        "reservation/UnusedAmortizedUpfrontFeeForBillingPeriod": round(upfront_per_hr * unused_qty, 6),
+        "reservation/UnusedRecurringFee":                    round(recurring_per_hr * unused_qty, 6),
+        "savingsPlan/SavingsPlanARN":                        "",
+        "savingsPlan/SavingsPlanEffectiveCost":              "",
+        "savingsPlan/SavingsPlanRate":                       "",
+        "savingsPlan/UsedCommitment":                        "",
+        "savingsPlan/TotalCommitmentToDate":                 "",
+        "savingsPlan/RecurringCommitmentForBillingPeriod":   "",
+    }
+
+
+def sp_recurring_fee_row(res: dict, billing_start: str, billing_end: str,
+                         sp_rate: float, used_hours: int, total_hours: int) -> dict:
+    """
+    Monthly SavingsPlanRecurringFee row — one per SP-covered resource per billing period.
+    Carries SP commitment utilisation: how much of the monthly commitment was consumed.
+    """
+    monthly_commitment = round(sp_rate * total_hours, 6)
+    used_commitment    = round(sp_rate * used_hours, 6)
+    account = res["account"]
+    region  = res["region"]
+    itype   = res["instance_type"]
+    team_tag, env_tag, cc_tag = _tags(res.get("team"), res["env"])
+    region_pfx = region.replace("-", "").upper()[:4]
+    specs   = INSTANCE_TYPES[itype]
+
+    return {
+        "identity/LineItemId":              _line_item_id(),
+        "identity/TimeInterval":            f"{billing_start}/{billing_end}",
+        "bill/PayerAccountId":              PAYER_ACCOUNT,
+        "bill/BillingPeriodStartDate":      billing_start,
+        "bill/BillingPeriodEndDate":        billing_end,
+        "bill/BillingEntity":               "AWS",
+        "lineItem/UsageAccountId":          account,
+        "lineItem/LineItemType":            "SavingsPlanRecurringFee",
+        "lineItem/UsageStartDate":          billing_start,
+        "lineItem/UsageEndDate":            billing_end,
+        "lineItem/ProductCode":             "AmazonEC2",
+        "lineItem/UsageType":               f"{region_pfx}-BoxUsage:{itype}",
+        "lineItem/Operation":               "RunInstances",
+        "lineItem/AvailabilityZone":        res.get("az", ""),
+        "lineItem/ResourceId":              res["resource_id"],
+        "lineItem/UsageAmount":             float(total_hours),
+        "lineItem/NormalizationFactor":     specs["norm"],
+        "lineItem/NormalizedUsageAmount":   specs["norm"] * total_hours,
+        "lineItem/UnblendedRate":           round(res["od_rate"], 6),
+        "lineItem/UnblendedCost":           round(res["od_rate"] * total_hours, 6),
+        "lineItem/BlendedRate":             round(sp_rate, 6),
+        "lineItem/BlendedCost":             round(sp_rate * total_hours, 6),
+        "pricing/unit":                     "Hrs",
+        "pricing/publicOnDemandRate":       round(res["od_rate"], 6),
+        "pricing/publicOnDemandCost":       round(res["od_rate"] * total_hours, 6),
+        "product/ProductName":              "Amazon Elastic Compute Cloud",
+        "product/instanceType":             itype,
+        "product/vcpu":                     specs["vcpu"],
+        "product/memory":                   specs["memory"],
+        "product/operatingSystem":          "Linux",
+        "product/region":                   region,
+        "product/servicecode":              "AmazonEC2",
+        "resourceTags/user:Team":           team_tag,
+        "resourceTags/user:Environment":    env_tag,
+        "resourceTags/user:CostCenter":     cc_tag,
+        "reservation/ReservationARN":                        "",
+        "reservation/EffectiveCost":                         "",
+        "reservation/RecurringFeeForUsage":                  "",
+        "reservation/AmortizedUpfrontCostForUsage":          "",
+        "reservation/UnusedQuantity":                        "",
+        "reservation/UnusedAmortizedUpfrontFeeForBillingPeriod": "",
+        "reservation/UnusedRecurringFee":                    "",
+        "savingsPlan/SavingsPlanARN":                        res["sp_arn"],
+        "savingsPlan/SavingsPlanEffectiveCost":              round(sp_rate, 6),
+        "savingsPlan/SavingsPlanRate":                       round(sp_rate, 6),
+        "savingsPlan/UsedCommitment":                        used_commitment,
+        "savingsPlan/TotalCommitmentToDate":                 monthly_commitment,
+        "savingsPlan/RecurringCommitmentForBillingPeriod":   monthly_commitment,
+    }
+
+
+def _shared_infra_row(res: dict, product_code: str, usage_type: str, operation: str,
+                      product_name: str, hour_start: datetime,
+                      billing_start: str, billing_end: str) -> dict:
+    """Generic row for untagged shared-infra services (VPC, CloudTrail)."""
+    hour_end = hour_start + timedelta(hours=1)
+    interval = f"{hour_start.strftime('%Y-%m-%dT%H:%M:%SZ')}/{hour_end.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    cost = round(res["od_rate"] * random.uniform(0.98, 1.02), 6)
+    return {
+        "identity/LineItemId":              _line_item_id(),
+        "identity/TimeInterval":            interval,
+        "bill/PayerAccountId":              PAYER_ACCOUNT,
+        "bill/BillingPeriodStartDate":      billing_start,
+        "bill/BillingPeriodEndDate":        billing_end,
+        "bill/BillingEntity":               "AWS",
+        "lineItem/UsageAccountId":          res["account"],
+        "lineItem/LineItemType":            "Usage",
+        "lineItem/UsageStartDate":          hour_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "lineItem/UsageEndDate":            hour_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "lineItem/ProductCode":             product_code,
+        "lineItem/UsageType":               usage_type,
+        "lineItem/Operation":               operation,
+        "lineItem/AvailabilityZone":        "",
+        "lineItem/ResourceId":              res["resource_id"],
+        "lineItem/UsageAmount":             1.0,
+        "lineItem/NormalizationFactor":     "",
+        "lineItem/NormalizedUsageAmount":   "",
+        "lineItem/UnblendedRate":           round(res["od_rate"], 6),
+        "lineItem/UnblendedCost":           cost,
+        "lineItem/BlendedRate":             round(res["od_rate"], 6),
+        "lineItem/BlendedCost":             cost,
+        "pricing/unit":                     "Hrs",
+        "pricing/publicOnDemandRate":       round(res["od_rate"], 6),
+        "pricing/publicOnDemandCost":       cost,
+        "product/ProductName":              product_name,
+        "product/instanceType":             "",
+        "product/vcpu":                     "",
+        "product/memory":                   "",
+        "product/operatingSystem":          "",
+        "product/region":                   res["region"],
+        "product/servicecode":              product_code,
+        # No team tags — these are shared infra, deliberately untagged
+        "resourceTags/user:Team":           "",
+        "resourceTags/user:Environment":    "",
+        "resourceTags/user:CostCenter":     "",
+        "reservation/ReservationARN":                        "",
+        "reservation/EffectiveCost":                         "",
+        "reservation/RecurringFeeForUsage":                  "",
+        "reservation/AmortizedUpfrontCostForUsage":          "",
+        "reservation/UnusedQuantity":                        "",
+        "reservation/UnusedAmortizedUpfrontFeeForBillingPeriod": "",
+        "reservation/UnusedRecurringFee":                    "",
+        "savingsPlan/SavingsPlanARN":                        "",
+        "savingsPlan/SavingsPlanEffectiveCost":              "",
+        "savingsPlan/SavingsPlanRate":                       "",
+        "savingsPlan/UsedCommitment":                        "",
+        "savingsPlan/TotalCommitmentToDate":                 "",
+        "savingsPlan/RecurringCommitmentForBillingPeriod":   "",
     }
 
 
@@ -387,25 +643,63 @@ def generate(billing_month: str = "2026-03", cfg: GeneratorConfig | None = None)
 
     resources = build_resources(cfg)
 
-    # Apply untagged_pct — randomly nullify team for that fraction of resources
-    rng = random.Random(99)  # separate seed so main data isn't affected
-    for res in resources:
-        if res.get("team") is not None and rng.random() < cfg.untagged_pct:
-            res["team"] = None
+    # Guarantee exactly round(n * untagged_pct) resources are untagged.
+    # Probabilistic per-resource check can produce 0 untagged with certain seeds.
+    rng = random.Random(99)
+    tagged = [r for r in resources if r.get("team") is not None]
+    n_untagged = round(len(tagged) * cfg.untagged_pct)
+    for res in rng.sample(tagged, n_untagged):
+        res["team"] = None
 
     rows = []
+    # Track per-EC2-resource stats for monthly fee rows
+    ec2_hour_counts: dict[str, dict] = {}   # resource_id → {used, discount, amortized, sp_rate}
 
     for res in resources:
         for hour in hours:
-            # EC2: skip ~2% of hours to simulate brief stops/restarts
             if res["type"] == "ec2":
                 if random.random() < 0.02:
                     continue
-                rows.append(ec2_row(res, hour, billing_start, billing_end))
+                row = ec2_row(res, hour, billing_start, billing_end)
+                rows.append(row)
+                rid = res["resource_id"]
+                if rid not in ec2_hour_counts:
+                    ec2_hour_counts[rid] = {
+                        "res": res, "used": 0,
+                        "amortized": float(row.get("reservation/EffectiveCost") or 0),
+                        "sp_rate":   float(row.get("savingsPlan/SavingsPlanRate") or 0),
+                    }
+                ec2_hour_counts[rid]["used"] += 1
             elif res["type"] == "s3":
                 rows.append(s3_row(res, hour, billing_start, billing_end))
             elif res["type"] == "rds":
                 rows.append(rds_row(res, hour, billing_start, billing_end))
+            elif res["type"] == "vpc_nat":
+                rows.append(_shared_infra_row(
+                    res, "AmazonVPC", "USE1-NatGateway-Hours", "NatGateway",
+                    "Amazon Virtual Private Cloud", hour, billing_start, billing_end,
+                ))
+            elif res["type"] == "vpc_vpn":
+                rows.append(_shared_infra_row(
+                    res, "AmazonVPC", "USE1-VPN-Usage-Hours", "CreateVpnConnection",
+                    "Amazon Virtual Private Cloud", hour, billing_start, billing_end,
+                ))
+            elif res["type"] == "cloudtrail":
+                rows.append(_shared_infra_row(
+                    res, "AWSCloudTrail", "USE1-DigestEvent", "LookupEvents",
+                    "AWS CloudTrail", hour, billing_start, billing_end,
+                ))
+
+    # Monthly fee rows: one RIFee or SavingsPlanRecurringFee per RI/SP EC2 resource
+    for rid, info in ec2_hour_counts.items():
+        res = info["res"]
+        used = info["used"]
+        if res["discount"] == "ri" and info["amortized"] > 0:
+            rows.append(ri_fee_row(res, billing_start, billing_end,
+                                   info["amortized"], cfg.sample_hours))
+        elif res["discount"] == "sp" and info["sp_rate"] > 0:
+            rows.append(sp_recurring_fee_row(res, billing_start, billing_end,
+                                             info["sp_rate"], used, cfg.sample_hours))
 
     out_dir  = Path(__file__).parent.parent / "data" / "synthetic" / "aws"
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -57,6 +57,12 @@ SCENARIOS: dict[str, GeneratorConfig] = {
         sp_pct=0.15,
         sample_hours=72,
     ),
+    "untagged-medium": GeneratorConfig(
+        untagged_pct=0.35,
+        ri_pct=0.20,
+        sp_pct=0.15,
+        sample_hours=72,
+    ),
     "untagged-heavy": GeneratorConfig(
         untagged_pct=0.55,
         ri_pct=0.20,

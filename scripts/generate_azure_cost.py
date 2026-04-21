@@ -1,9 +1,11 @@
 """
 Generate synthetic Azure Cost Management Export data (Amortized view).
 - Daily grain (one row per resource per day)
-- Amortized cost: RI/savings plan upfront fees spread daily, not lump-sum on purchase date
+- Amortized cost: RI/SP upfront fees spread daily, not lump-sum on purchase date
 - Realistic meter categories, VM sizes, resource IDs, subscription structure
-- ChargeType: Usage (majority), Purchase (marketplace/reservation fees)
+- ChargeType: Usage | UnusedReservation | UnusedSavingsPlan
+- Shared-infra subscription: truly cross-team resources with no tag (spread in dbt)
+- Unused commitment rows: ~20% of RI/SP days have partial waste row
 """
 import csv
 import json
@@ -19,21 +21,44 @@ random.seed(42)
 # ---------------------------------------------------------------------------
 # Subscription & resource catalog
 # ---------------------------------------------------------------------------
+SHARED_INFRA_SUB = "a1b2c3d4-9999-9999-9999-000000000099"
+
 SUBSCRIPTIONS = {
     "a1b2c3d4-0001-0001-0001-000000000001": "platform-prod-sub",
     "a1b2c3d4-0002-0002-0002-000000000002": "data-eng-prod-sub",
     "a1b2c3d4-0003-0003-0003-000000000003": "app-prod-sub",
+    SHARED_INFRA_SUB:                        "shared-infra-sub",
 }
 
+# Shared infra resources — no team owner, costs spread across all teams in dbt
+# (meter_category, product_name, meter_name, service_family, rg, region, daily_cost_usd)
+SHARED_RESOURCES = [
+    ("Monitor",        "Azure Monitor",      "Data Ingested",  "Management",   "rg-shared-infra", "eastus",      45.00),
+    ("Networking",     "Virtual Network",    "Intra-Region",   "Networking",   "rg-shared-infra", "eastus",      28.00),
+    ("API Management", "API Management",     "Gateway Units",  "Integration",  "rg-shared-infra", "eastus",     120.00),
+    ("Key Vault",      "Azure Key Vault",    "Operations",     "Security",     "rg-shared-infra", "eastus",       8.00),
+    ("Storage",        "Azure Blob Storage", "Data Stored",    "Storage",      "rg-shared-infra", "eastus",      18.00),
+]
+
 VM_SIZES = {
-    # (meter_name, daily_od_cost_usd)
-    "Standard_B2s":      ("B2s",    2.016),
-    "Standard_D2s_v3":   ("D2s v3", 4.032),
-    "Standard_D4s_v3":   ("D4s v3", 8.064),
-    "Standard_E4s_v3":   ("E4s v3", 8.736),
-    "Standard_F4s_v2":   ("F4s v2", 6.048),
-    "Standard_D8s_v3":   ("D8s v3", 16.128),
-    "Standard_E8s_v3":   ("E8s v3", 17.472),
+    # (meter_name, daily_od_cost_usd, vcpus)
+    "Standard_B2s":      ("B2s",    2.016,  2),
+    "Standard_D2s_v3":   ("D2s v3", 4.032,  2),
+    "Standard_D4s_v3":   ("D4s v3", 8.064,  4),
+    "Standard_E4s_v3":   ("E4s v3", 8.736,  4),
+    "Standard_F4s_v2":   ("F4s v2", 6.048,  4),
+    "Standard_D8s_v3":   ("D8s v3", 16.128, 8),
+    "Standard_E8s_v3":   ("E8s v3", 17.472, 8),
+}
+
+BILLING_ACCOUNT_ID = "EA-9876543210"   # synthetic EA enrollment number
+
+# Azure resource provider per service type — used for ConsumedService column
+CONSUMED_SERVICE = {
+    "vm":      "Microsoft.Compute",
+    "storage": "Microsoft.Storage",
+    "sql":     "Microsoft.Sql",
+    "shared":  "Microsoft.SharedInfra",
 }
 
 # Resource definitions: (sku, team, env, subscription_id, resource_group, region)
@@ -92,24 +117,29 @@ def _tags_str(team: str | None, env: str) -> str:
 
 def _vm_row(sku: str, team, env: str, sub: str, rg: str, region: str,
             day: date, vm_name: str, discount: str) -> dict:
-    meter_name, daily_od = VM_SIZES[sku]
+    meter_name, daily_od, vcpus = VM_SIZES[sku]
+    payg_price  = round(daily_od / 24, 6)
     ri_discount = random.uniform(0.30, 0.45)
     sp_discount = random.uniform(0.20, 0.35)
 
     if discount == "ri":
-        amortized = round(daily_od * (1 - ri_discount) * random.uniform(0.98, 1.02), 6)
-        benefit   = BENEFIT_NAMES["ri"].format(region=region)
-        benefit_id = f"/providers/Microsoft.BillingBenefits/savingsPlanOrders/{uuid.uuid4()}"
+        amortized     = round(daily_od * (1 - ri_discount) * random.uniform(0.98, 1.02), 6)
+        pricing_model = "Reservation"
+        benefit       = BENEFIT_NAMES["ri"].format(region=region)
+        benefit_id    = f"/providers/Microsoft.BillingBenefits/savingsPlanOrders/{uuid.uuid4()}"
     elif discount == "sp":
-        amortized = round(daily_od * (1 - sp_discount) * random.uniform(0.98, 1.02), 6)
-        benefit   = BENEFIT_NAMES["sp"]
-        benefit_id = f"/providers/Microsoft.BillingBenefits/savingsPlanOrders/{uuid.uuid4()}"
+        amortized     = round(daily_od * (1 - sp_discount) * random.uniform(0.98, 1.02), 6)
+        pricing_model = "SavingsPlan"
+        benefit       = BENEFIT_NAMES["sp"]
+        benefit_id    = f"/providers/Microsoft.BillingBenefits/savingsPlanOrders/{uuid.uuid4()}"
     else:
-        amortized = round(daily_od * random.uniform(0.99, 1.01), 6)
-        benefit   = ""
-        benefit_id = ""
+        amortized     = round(daily_od * random.uniform(0.99, 1.01), 6)
+        pricing_model = "OnDemand"
+        benefit       = ""
+        benefit_id    = ""
 
     return {
+        "BillingAccountId":         BILLING_ACCOUNT_ID,
         "InvoiceSectionName":       SUBSCRIPTIONS[sub],
         "AccountName":              SUBSCRIPTIONS[sub],
         "AccountOwnerId":           f"owner_{sub[-4:]}@company.com",
@@ -126,11 +156,16 @@ def _vm_row(sku: str, team, env: str, sub: str, rg: str, region: str,
         "Quantity":                 24.0,
         "Unit":                     "1 Hour",
         "CostInBillingCurrency":    amortized,
-        "UnitPrice":                round(daily_od / 24, 6),
+        "UnitPrice":                payg_price,
+        "EffectivePrice":           round(amortized / 24, 6),
+        "PayGPrice":                payg_price,
+        "PricingModel":             pricing_model,
         "BillingCurrency":          "USD",
+        "ConsumedService":          CONSUMED_SERVICE["vm"],
         "ResourceId":               _resource_id(sub, rg, "Microsoft.Compute", "virtualMachines", vm_name),
+        "ResourceName":             vm_name,
         "Tags":                     _tags_str(team, env),
-        "AdditionalInfo":           json.dumps({"ServiceType": "Standard", "VMName": vm_name}),
+        "AdditionalInfo":           json.dumps({"ServiceType": "Standard", "VMName": vm_name, "vCPUs": vcpus}),
         "ServiceFamily":            "Compute",
         "ChargeType":               "Usage",
         "PublisherType":            "Azure",
@@ -146,6 +181,7 @@ def _storage_row(name: str, team, env: str, sub: str, rg: str, region: str,
     daily_cost = round((gb * rate / 30) * random.uniform(0.997, 1.003), 6)
 
     return {
+        "BillingAccountId":         BILLING_ACCOUNT_ID,
         "InvoiceSectionName":       SUBSCRIPTIONS[sub],
         "AccountName":              SUBSCRIPTIONS[sub],
         "AccountOwnerId":           f"owner_{sub[-4:]}@company.com",
@@ -163,8 +199,13 @@ def _storage_row(name: str, team, env: str, sub: str, rg: str, region: str,
         "Unit":                     "1 GB/Month",
         "CostInBillingCurrency":    daily_cost,
         "UnitPrice":                rate,
+        "EffectivePrice":           rate,
+        "PayGPrice":                rate,
+        "PricingModel":             "OnDemand",
         "BillingCurrency":          "USD",
+        "ConsumedService":          CONSUMED_SERVICE["storage"],
         "ResourceId":               _resource_id(sub, rg, "Microsoft.Storage", "storageAccounts", name),
+        "ResourceName":             name,
         "Tags":                     _tags_str(team, env),
         "AdditionalInfo":           json.dumps({"AccountType": tier}),
         "ServiceFamily":            "Storage",
@@ -178,7 +219,9 @@ def _storage_row(name: str, team, env: str, sub: str, rg: str, region: str,
 def _sql_row(sku: str, team, env: str, sub: str, rg: str, region: str,
              daily_cost: float, db_name: str, day: date) -> dict:
     cost = round(daily_cost * random.uniform(0.99, 1.01), 6)
+    unit_price = round(daily_cost / 24, 6)
     return {
+        "BillingAccountId":         BILLING_ACCOUNT_ID,
         "InvoiceSectionName":       SUBSCRIPTIONS[sub],
         "AccountName":              SUBSCRIPTIONS[sub],
         "AccountOwnerId":           f"owner_{sub[-4:]}@company.com",
@@ -195,12 +238,113 @@ def _sql_row(sku: str, team, env: str, sub: str, rg: str, region: str,
         "Quantity":                 24.0,
         "Unit":                     "1 Hour",
         "CostInBillingCurrency":    cost,
-        "UnitPrice":                round(daily_cost / 24, 6),
+        "UnitPrice":                unit_price,
+        "EffectivePrice":           unit_price,
+        "PayGPrice":                unit_price,
+        "PricingModel":             "OnDemand",
         "BillingCurrency":          "USD",
+        "ConsumedService":          CONSUMED_SERVICE["sql"],
         "ResourceId":               _resource_id(sub, rg, "Microsoft.Sql", "servers/databases", db_name),
+        "ResourceName":             db_name,
         "Tags":                     _tags_str(team, env),
         "AdditionalInfo":           "{}",
         "ServiceFamily":            "Databases",
+        "ChargeType":               "Usage",
+        "PublisherType":            "Azure",
+        "BenefitId":                "",
+        "BenefitName":              "",
+    }
+
+
+def _unused_commitment_row(team, env: str, sub: str, rg: str, region: str,
+                           day: date, vm_name: str, discount: str,
+                           daily_od: float, rng: random.Random) -> dict:
+    """Represent unused RI/SP capacity for a day — waste that cost money but ran nothing."""
+    waste_frac = rng.uniform(0.05, 0.30)
+    if discount == "ri":
+        daily_commitment = daily_od * 0.62   # approx 38% avg RI discount → committed at 62% OD
+        charge_type  = "UnusedReservation"
+        benefit_name = f"Reserved VM Instance_{region}_1Year"
+    else:
+        daily_commitment = daily_od * 0.73   # approx 27% avg SP discount
+        charge_type  = "UnusedSavingsPlan"
+        benefit_name = "Compute savings plan_1Year"
+
+    waste_cost  = round(daily_commitment * waste_frac, 6)
+    benefit_id  = f"/providers/Microsoft.BillingBenefits/savingsPlanOrders/{uuid.uuid4()}"
+
+    pricing_model = "Reservation" if discount == "ri" else "SavingsPlan"
+    return {
+        "BillingAccountId":         BILLING_ACCOUNT_ID,
+        "InvoiceSectionName":       SUBSCRIPTIONS[sub],
+        "AccountName":              SUBSCRIPTIONS[sub],
+        "AccountOwnerId":           f"owner_{sub[-4:]}@company.com",
+        "SubscriptionId":           sub,
+        "SubscriptionName":         SUBSCRIPTIONS[sub],
+        "ResourceGroup":            rg,
+        "ResourceLocation":         region,
+        "Date":                     day.isoformat(),
+        "ProductName":              f"Unused Reservation - {vm_name}",
+        "MeterCategory":            "Virtual Machines",
+        "MeterSubcategory":         "Unused Capacity",
+        "MeterId":                  str(uuid.uuid5(uuid.NAMESPACE_DNS, f"unused-{vm_name}-{day}")),
+        "MeterName":                "Unused",
+        "Quantity":                 0.0,
+        "Unit":                     "1 Hour",
+        "CostInBillingCurrency":    waste_cost,
+        "UnitPrice":                0.0,
+        "EffectivePrice":           0.0,
+        "PayGPrice":                round(daily_od / 24, 6),
+        "PricingModel":             pricing_model,
+        "BillingCurrency":          "USD",
+        "ConsumedService":          CONSUMED_SERVICE["vm"],
+        "ResourceId":               "",
+        "ResourceName":             vm_name,
+        "Tags":                     _tags_str(team, env),
+        "AdditionalInfo":           "{}",
+        "ServiceFamily":            "Compute",
+        "ChargeType":               charge_type,
+        "PublisherType":            "Azure",
+        "BenefitId":                benefit_id,
+        "BenefitName":              benefit_name,
+    }
+
+
+def _shared_resource_row(meter_cat: str, product: str, meter_name: str,
+                         service_family: str, rg: str, region: str,
+                         daily_cost: float, day: date) -> dict:
+    """Shared-infra row — no team tag, cost spread across all teams in dbt."""
+    cost     = round(daily_cost * random.uniform(0.99, 1.01), 6)
+    res_name = meter_cat.lower().replace(" ", "-")
+    return {
+        "BillingAccountId":         BILLING_ACCOUNT_ID,
+        "InvoiceSectionName":       SUBSCRIPTIONS[SHARED_INFRA_SUB],
+        "AccountName":              SUBSCRIPTIONS[SHARED_INFRA_SUB],
+        "AccountOwnerId":           "owner_infra@company.com",
+        "SubscriptionId":           SHARED_INFRA_SUB,
+        "SubscriptionName":         SUBSCRIPTIONS[SHARED_INFRA_SUB],
+        "ResourceGroup":            rg,
+        "ResourceLocation":         region,
+        "Date":                     day.isoformat(),
+        "ProductName":              product,
+        "MeterCategory":            meter_cat,
+        "MeterSubcategory":         meter_name,
+        "MeterId":                  str(uuid.uuid5(uuid.NAMESPACE_DNS, meter_cat + region)),
+        "MeterName":                meter_name,
+        "Quantity":                 round(daily_cost / 0.045, 2),
+        "Unit":                     "1 Unit",
+        "CostInBillingCurrency":    cost,
+        "UnitPrice":                0.045,
+        "EffectivePrice":           0.045,
+        "PayGPrice":                0.045,
+        "PricingModel":             "OnDemand",
+        "BillingCurrency":          "USD",
+        "ConsumedService":          CONSUMED_SERVICE["shared"],
+        "ResourceId":               _resource_id(SHARED_INFRA_SUB, rg, "Microsoft.SharedInfra", meter_cat, res_name),
+        "ResourceName":             res_name,
+        "Tags":                     "{}",
+        "AdditionalInfo":           "{}",
+        "ServiceFamily":            service_family,
         "ChargeType":               "Usage",
         "PublisherType":            "Azure",
         "BenefitId":                "",
@@ -228,12 +372,21 @@ def generate(billing_month: str = "2026-03", cfg: GeneratorConfig | None = None)
     vm_discounts = [random.choice(discount_pool) for _ in VM_RESOURCES]
     vm_names = [f"vm-{sku.lower().replace('_','-')}-{i:02d}" for i, (sku, *_) in enumerate(VM_RESOURCES)]
 
+    waste_rng = random.Random(77)   # separate seed — doesn't shift main data
+
     for day in days:
         for i, (sku, team, env, sub, rg, region) in enumerate(VM_RESOURCES):
-            # Skip ~1% of days to simulate maintenance windows
             if random.random() < 0.01:
                 continue
-            rows.append(_vm_row(sku, team, env, sub, rg, region, day, vm_names[i], vm_discounts[i]))
+            discount = vm_discounts[i]
+            rows.append(_vm_row(sku, team, env, sub, rg, region, day, vm_names[i], discount))
+
+            # ~20% of RI/SP days emit an UnusedReservation / UnusedSavingsPlan row
+            if discount in ("ri", "sp") and waste_rng.random() < 0.20:
+                _, daily_od, _ = VM_SIZES[sku]
+                rows.append(_unused_commitment_row(
+                    team, env, sub, rg, region, day, vm_names[i], discount, daily_od, waste_rng
+                ))
 
         for name, team, env, sub, rg, region, gb, tier in STORAGE_RESOURCES:
             rows.append(_storage_row(name, team, env, sub, rg, region, gb, tier, day))
@@ -242,12 +395,18 @@ def generate(billing_month: str = "2026-03", cfg: GeneratorConfig | None = None)
             db_name = f"sqldb-{sku.split('_')[0].lower()}-{sub[-4:]}"
             rows.append(_sql_row(sku, team, env, sub, rg, region, daily_cost, db_name, day))
 
-    # Apply untagged_pct: strip tags from a fraction of tagged rows
-    rng = random.Random(99)
+        # Shared-infra: cross-team resources — tagged with no team, spread in dbt
+        for meter_cat, product, meter_name, svc_family, rg, region, daily_cost in SHARED_RESOURCES:
+            rows.append(_shared_resource_row(meter_cat, product, meter_name, svc_family, rg, region, daily_cost, day))
+
+    # Apply untagged_pct: strip tags from a fraction of tagged Usage rows
+    tag_rng = random.Random(99)
     untagged_count = 0
     for row in rows:
+        if row["ChargeType"] != "Usage":
+            continue                          # don't strip tags from waste rows
         tags = json.loads(row["Tags"]) if row["Tags"] else {}
-        if tags.get("team") is not None and rng.random() < cfg.untagged_pct:
+        if tags.get("team") is not None and tag_rng.random() < cfg.untagged_pct:
             row["Tags"] = "{}"
             untagged_count += 1
 
@@ -260,8 +419,13 @@ def generate(billing_month: str = "2026-03", cfg: GeneratorConfig | None = None)
         writer.writeheader()
         writer.writerows(rows)
 
+    usage_rows  = [r for r in rows if r["ChargeType"] == "Usage"]
+    waste_rows  = [r for r in rows if r["ChargeType"] in ("UnusedReservation", "UnusedSavingsPlan")]
+    shared_rows = [r for r in rows if r["SubscriptionId"] == SHARED_INFRA_SUB]
     print(f"Generated {len(rows)} rows -> {out_file}  [config: {cfg.summary()}]")
-    print(f"  Untagged rows: {untagged_count} ({untagged_count/len(rows):.1%})")
+    print(f"  Untagged rows (usage): {untagged_count} ({untagged_count/max(len(usage_rows),1):.1%})")
+    print(f"  Unused commitment rows: {len(waste_rows)}")
+    print(f"  Shared-infra rows: {len(shared_rows)}")
     services = {}
     for r in rows:
         s = r["MeterCategory"]

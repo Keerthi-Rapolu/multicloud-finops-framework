@@ -1,0 +1,16 @@
+site_name: Multi-Cloud FinOps Framework
+site_description: Open-source framework for normalizing and allocating cloud costs across AWS, Azure, and GCP
+site_author: Keerthi Rapolu & Rishika Naha
+
+docs_dir: docs
+
+nav:
+  - Home: index.md
+  - Staging Layer: STAGING.md
+  - NEC Calculations: NEC_CALCULATIONS.md
+  - AWS CUR Reference: AWS_CUR_REFERENCE.md
+  - Azure Cost Reference: AZURE_COST_REFERENCE.md
+  - GCP Billing Reference: GCP_BILLING_REFERENCE.md
+
+theme:
+  name: material

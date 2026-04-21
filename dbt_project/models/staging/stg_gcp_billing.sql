@@ -1,9 +1,8 @@
 /*
   stg_gcp_billing — GCP Billing Detailed Usage Export staging model (Bronze → Silver)
 
-  Reads raw hourly Parquet files, casts types, parses labels (list-of-dicts)
-  and credits (list-of-dicts) JSON arrays using DuckDB macros,
-  renames to snake_case.
+  Reads raw Parquet files, casts types, parses system_labels and labels
+  (list-of-dicts) JSON arrays using DuckDB macros, renames to snake_case.
   Does NOT compute NEC — credit aggregation for NEC happens in int_gcp_nec.
 */
 
@@ -18,6 +17,7 @@ staged as (
         "project.id"                                                            as account_id,
         "project.name"                                                          as account_name,
         "project.number"                                                        as project_number,
+        "project.ancestry_numbers"                                              as project_ancestry,
 
         -- Service / SKU
         "service.id"                                                            as service_id,
@@ -43,22 +43,38 @@ staged as (
         "location.zone"                                                         as zone,
         "location.country"                                                      as country,
 
+        -- Compute metadata from system_labels (GCE only; null for Storage/BQ/SQL)
+        -- system_labels format: [{"key": "compute_cores", "value": "4"}, ...]
+        try_cast(
+            nullif({{ extract_gcp_label("system_labels", "compute_cores") }},   '')
+        as integer)                                                             as compute_cores,
+        try_cast(
+            nullif({{ extract_gcp_label("system_labels", "compute_memory") }},  '')
+        as integer)                                                             as compute_memory_gb,
+        case
+            when {{ extract_gcp_label("system_labels", "is_unused_reservation") }} = 'true'
+            then true else false
+        end                                                                     as is_unused_reservation,
+
         -- Usage
-        try_cast("usage.amount"                 as double)                      as usage_amount,
+        try_cast("usage.amount"   as double)                                    as usage_amount,
         "usage.unit"                                                            as usage_unit,
-        try_cast("usage.amount_in_pricing_units" as double)                     as usage_amount_pricing,
         "usage.pricing_unit"                                                    as pricing_unit,
 
-        -- Cost (before credits)
-        try_cast(cost                           as double)                      as list_cost,
+        -- Cost (before credits = list/on-demand price)
+        try_cast(cost             as double)                                    as list_cost,
+        try_cast(cost_at_list     as double)                                    as cost_at_list,
         currency                                                                as currency,
         cost_type                                                               as cost_type,
 
         -- Credits JSON — raw string kept for int_gcp_nec to aggregate
         credits                                                                 as credits_raw,
 
-        -- Total credit amount from discount types (negative = savings)
+        -- Total credit amount from CUD/SUD/promotion (negative = savings)
         {{ sum_gcp_credits("credits") }}                                        as total_credit_amount,
+
+        -- Net cost after all credits
+        try_cast(cost as double) + ({{ sum_gcp_credits("credits") }})          as net_cost,
 
         -- Labels — parsed from list-of-dicts
         -- GCP labels format: [{"key": "team", "value": "platform"}, ...]

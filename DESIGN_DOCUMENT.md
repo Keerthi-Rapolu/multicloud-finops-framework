@@ -4,7 +4,7 @@
 **Project:** Research Paper + GitHub Demo  
 **Authors:** Keerthi Rapolu + Rishika Naha 
 **Date:** April 2026  
-**Status:** Draft
+**Status:** In Progress — implementation complete; paper drafting underway
 
 ---
 
@@ -178,10 +178,10 @@ python load_synthetic.py --scenario normal --untagged-pct 0.08 --ri-pct 0.35 --s
 python load_synthetic.py --scenario full-month --force
 ```
 
-**Synthetic data realism:**
-- **AWS**: hourly grain, correct DiscountedUsage / SavingsPlanCoveredUsage line item types, `UnblendedCost=0` on RI rows with `reservation/EffectiveCost` populated
-- **Azure**: daily grain, amortized view, `BenefitName` populated for RI/SP rows, Tags as JSON blob
-- **GCP**: hourly grain for Compute/Cloud SQL, daily for GCS storage / BQ storage, CUD/SUD credits as list-of-dicts matching real BigQuery export structure
+**Synthetic data realism (48 / 32 / 27 columns per cloud):**
+- **AWS** (48 cols): hourly grain; correct `DiscountedUsage` / `SavingsPlanCoveredUsage` line item types; `UnblendedCost=0` on RI rows with `reservation/EffectiveCost` populated; monthly `RIFee` + `SavingsPlanRecurringFee` summary rows; `vcpu` and `memory` per instance type; RI unused quantity fields; SP total/used/recurring commitment fields; `payer_account_id` for consolidated billing
+- **Azure** (32 cols): daily grain, amortized export; `BenefitName` / `BenefitId` for RI/SP rows; `UnusedReservation` / `UnusedSavingsPlan` charge type rows for waste; Tags as JSON blob; `PricingModel`, `EffectivePrice`, `PayGPrice` for discount analysis; `vcpus` from AdditionalInfo JSON; `BillingAccountId` (EA enrollment); shared-infra subscription rows with no team tag for shared cost spreading
+- **GCP** (27 cols): hourly grain for Compute Engine / Cloud SQL, daily for Cloud Storage / BigQuery storage; CUD/SUD credits as list-of-dicts matching real BigQuery export structure; `system_labels` with `compute_cores`, `compute_memory`, `is_unused_reservation` for GCE VMs; `cost_at_list` alongside `cost`; `project.ancestry_numbers` for org hierarchy; labels as list-of-dicts
 
 ---
 
@@ -245,80 +245,110 @@ models/
 
 This is the normalized schema every cloud's data maps to. Agree on this before writing any code.
 
+The schema below reflects the actual `fct_unified_billing` mart as implemented. All 31 columns are present on every row; cloud-specific fields are NULL where not applicable.
+
 ```sql
-CREATE TABLE unified_billing (
+CREATE TABLE fct_unified_billing (
     -- Identity
-    record_id           VARCHAR,        -- synthetic unique ID
     cloud_provider      VARCHAR,        -- 'aws' | 'azure' | 'gcp'
-    billing_period      DATE,           -- first day of billing month
-    usage_date          DATE,           -- actual usage date
+    billing_account_id  VARCHAR,        -- AWS payer account / Azure EA enrollment / GCP billing account
+    billing_month       VARCHAR,        -- 'YYYY-MM'
+    account_id          VARCHAR,        -- AWS member account / Azure subscription / GCP project ID
+    account_name        VARCHAR,        -- human-readable account/subscription/project name
+
+    -- Time
+    usage_date          TIMESTAMP,      -- hourly for AWS/GCP; daily (midnight) for Azure
 
     -- Resource
     resource_id         VARCHAR,        -- cloud-native resource identifier
-    resource_name       VARCHAR,        -- human-readable name
-    service_name        VARCHAR,        -- e.g. 'EC2', 'Azure VM', 'Compute Engine'
-    service_category    VARCHAR,        -- 'compute' | 'storage' | 'network' | 'database' | 'other'
-    region              VARCHAR,        -- normalized region name
+    service_name        VARCHAR,        -- cloud-native service name (ProductCode / MeterCategory / service.description)
+    product_name        VARCHAR,        -- product detail (product/ProductName / ProductName / sku.description)
+    instance_type       VARCHAR,        -- EC2 instance type (AWS only; null for Azure/GCP)
+    region              VARCHAR,        -- normalized lowercase region
 
-    -- Organization
-    account_id          VARCHAR,        -- AWS account / Azure subscription / GCP project
-    account_name        VARCHAR,
+    -- Usage
+    usage_amount        DOUBLE,         -- quantity consumed
+    usage_unit          VARCHAR,        -- unit of usage (hour / GB-Mo / tebibyte / etc.)
+    currency            VARCHAR,        -- billing currency (USD)
 
-    -- Tags (allocation keys)
-    tag_team            VARCHAR,        -- from cost allocation tags
-    tag_product         VARCHAR,
-    tag_environment     VARCHAR,        -- 'prod' | 'staging' | 'dev'
-    tag_cost_center     VARCHAR,
-    is_tagged           BOOLEAN,        -- false = needs heuristic attribution
+    -- Cost
+    list_cost           DOUBLE,         -- gross/on-demand cost before discounts
+    nec                 DOUBLE,         -- Net Effective Cost (used cost after commitment discounts; excludes waste)
+    nec_used            DOUBLE,         -- cost attributable to actual resource usage
+    nec_waste           DOUBLE,         -- cost of idle commitment capacity (RI/SP unused hours)
+    effective_unit_price DOUBLE,        -- nec_used / usage_amount — true per-unit cost after discounts
+    discount_type       VARCHAR,        -- 'ri' | 'sp' | 'on_demand'
 
-    -- Costs (all in USD)
-    list_cost           DECIMAL(18,6),  -- on-demand / list price
-    discount_amount     DECIMAL(18,6),  -- RI/SP/CUD savings
-    net_effective_cost  DECIMAL(18,6),  -- list_cost - discount_amount (amortized)
-    amortized_cost      DECIMAL(18,6),  -- upfront fees spread over usage period
+    -- Compute sizing (null for storage/database/analytics rows)
+    vcpu                INTEGER,        -- vCPU count (EC2, Azure VM, GCE only)
+    memory_gb           INTEGER,        -- memory in GiB (EC2 and GCE only; null for Azure)
 
-    -- Allocation output (written by Layer 3)
-    allocated_team      VARCHAR,        -- final attributed team (post-allocation)
-    allocation_method   VARCHAR,        -- 'tag' | 'account' | 'heuristic' | 'ml' | 'shared'
-    allocation_confidence DECIMAL(5,2), -- 0.0–1.0, for heuristic/ML methods
+    -- Tags (normalized across all clouds)
+    tag_team            VARCHAR,        -- cost allocation tag: team
+    tag_environment     VARCHAR,        -- cost allocation tag: environment
+    tag_cost_center     VARCHAR,        -- cost allocation tag: cost center
+    is_tagged           BOOLEAN,        -- true if tag_team is non-null
 
-    -- Metadata
-    ingestion_timestamp TIMESTAMP,
-    source_file         VARCHAR
+    -- Allocation (computed by int_azure_nec; pass-through for AWS/GCP)
+    allocated_team      VARCHAR,        -- team after shared-cost spreading (= tag_team for tagged rows)
+    allocated_nec       DOUBLE,         -- NEC share attributed to allocated_team
+    is_shared_cost      BOOLEAN,        -- true when cost was split across multiple teams
+    is_commitment_waste BOOLEAN,        -- true for unused RI/SP/CUD rows
+
+    -- Normalized service category (derived in mart)
+    service_category    VARCHAR         -- 'Compute' | 'Storage' | 'Database' | 'Analytics' | 'Platform' | 'Other'
 );
 ```
 
 ### Cloud Field Mappings
 
-| CAS Field | AWS CUR Column | Azure Column | GCP Column |
+| Mart Column | AWS Source | Azure Source | GCP Source |
 |---|---|---|---|
-| `resource_id` | `lineItem/ResourceId` | `ResourceId` | `resource.name` |
-| `service_name` | `lineItem/ProductCode` | `ServiceName` | `service.description` |
+| `billing_account_id` | `bill/PayerAccountId` | `BillingAccountId` | `billing_account_id` |
 | `account_id` | `lineItem/UsageAccountId` | `SubscriptionId` | `project.id` |
-| `list_cost` | `lineItem/UnblendedCost` | `CostInBillingCurrency` | `cost` |
-| `discount_amount` | `savingsPlan/SavingsPlanEffectiveCost` | `BenefitName` | `credits` |
-| `tag_team` | `resourceTags/user:Team` | `Tags['team']` | `labels['team']` |
-| `is_tagged` | derived | derived | derived |
+| `account_name` | null (not in CUR) | `SubscriptionName` | `project.name` |
+| `usage_date` | `lineItem/UsageStartDate` (hourly) | `Date` (daily) | `usage_start_time` (hourly) |
+| `resource_id` | `lineItem/ResourceId` | `ResourceId` | `resource.name` |
+| `service_name` | `lineItem/ProductCode` (`AmazonEC2`) | `MeterCategory` (`Virtual Machines`) | `service.description` (`Compute Engine`) |
+| `service_category` | derived from service_name | derived from service_name | derived from service_name |
+| `list_cost` | `pricing/publicOnDemandCost` | `CostInBillingCurrency` (amortized) | `cost` (pre-credit) |
+| `nec` | `reservation/EffectiveCost` or `savingsPlan/SavingsPlanEffectiveCost` or `unblended_cost` | `list_cost` minus waste rows | `cost` + sum(credits amounts) |
+| `nec_waste` | 0 (AWS waste on separate RIFee rows) | `list_cost` where `ChargeType = UnusedReservation/SP` | 0 (not isolated) |
+| `discount_type` | derived from `lineItem/LineItemType` | derived from `BenefitName` | derived from credits JSON `type` field |
+| `vcpu` | `product/vcpu` (string cast to int) | `AdditionalInfo['vCPUs']` | `system_labels['compute_cores']` |
+| `memory_gb` | `product/memory` ("8 GiB" → int) | null (not in Azure billing) | `system_labels['compute_memory']` |
+| `tag_team` | `resourceTags/user:Team` | `Tags['team']` (JSON extract) | `labels[key='team']` (list-of-dicts) |
+| `is_commitment_waste` | false (AWS uses RIFee rows, filtered) | `ChargeType in (UnusedReservation, UnusedSavingsPlan)` | `system_labels['is_unused_reservation']` |
+| `allocated_team` | = `tag_team` (pass-through) | fan-out across teams for untagged/shared subs | = `tag_team` (pass-through) |
+| `is_shared_cost` | false | true for untagged rows spread across N teams | false |
 
 ---
 
 ## 6. Core Modules
 
-### 6.1 NEC Modeling (`allocation/nec_model.py`)
+### 6.1 NEC Modeling
 
-Net Effective Cost accounts for Reserved Instance and Savings Plan amortization.
+Net Effective Cost (NEC) = actual cost paid after discounts, split into used cost and idle commitment waste.
 
-**Formula:**
 ```
-NEC = (UpfrontFee / CommitmentHours) + RecurringFee + OnDemandRemainder
+nec       = cost tied to real consumed usage (nec_used)
+nec_waste = idle or unused commitment cost (surfaced separately, not added into nec)
 ```
 
-**Logic:**
-1. Identify RI/SP line items in normalized data
-2. Compute hourly amortized rate per commitment
-3. Map commitment coverage to resource IDs
-4. Apply per-resource NEC = amortized_rate × hours_used
-5. Remainder (uncovered usage) billed at on-demand rate
+**Per-cloud formula (for the main commitment-related row types):**
+
+| Cloud | Formula |
+|---|---|
+| AWS `Usage` | `nec_used = unblended_cost` |
+| AWS `DiscountedUsage` (RI) | `nec_used = reservation_effective_cost` |
+| AWS `SavingsPlanCoveredUsage` | `nec_used = savings_plan_effective_cost` |
+| AWS `RIFee` | `nec_used = 0; nec_waste = unused_upfront + unused_recurring` |
+| AWS `SavingsPlanRecurringFee` | `nec_used = 0; nec_waste = recurring_commitment − used_commitment` |
+| Azure `Usage` rows | `nec_used = billed_cost` (amortized actual cost from amortized export) |
+| Azure `UnusedReservation/SP` | `nec_waste = billed_cost` |
+| GCP (Detailed Export) | `nec = GREATEST(list_cost + total_credit_amount, 0.0)` |
+
+**Why not `unblended_cost` for AWS?** RI-covered hours show `$0` (usage looks free); SP-covered hours show full OD rate (discount invisible in `unblended_cost`).
 
 **Why this matters:** Without NEC, a team that benefits from an RI purchased by a central finance team shows $0 compute cost — distorting accountability.
 
@@ -403,7 +433,7 @@ You have Claude integrated in VS Code — use it for:
 
 ### Querying DuckDB Interactively (VS Code)
 
-All dbt models materialize into `finops.duckdb` at the repo root. To browse schemas and run ad-hoc SQL without leaving VS Code:
+All dbt models materialize into `finops_dbt.duckdb` at the repo root. To browse schemas and run ad-hoc SQL without leaving VS Code:
 
 **Install two VS Code extensions:**
 1. **SQLTools** (Matheus Teixeira) — base SQL client framework
@@ -412,7 +442,7 @@ All dbt models materialize into `finops.duckdb` at the repo root. To browse sche
 **Connect:**
 1. Click the database icon in the VS Code sidebar
 2. Add New Connection → DuckDB
-3. Database file: `c:\<path-to-repo>\multicloud-finops-framework\finops.duckdb`
+3. Database file: `c:\<path-to-repo>\multicloud-finops-framework\finops_dbt.duckdb`
 4. Save → the schema tree appears with all materialized models
 
 **Available schemas after `dbt run`:**
@@ -427,10 +457,11 @@ All dbt models materialize into `finops.duckdb` at the repo root. To browse sche
 
 **Useful queries:**
 ```sql
--- Row counts per cloud in unified table
-SELECT cloud_provider, COUNT(*) as rows, ROUND(SUM(nec), 2) as total_nec
+-- Spend by cloud and service category
+SELECT cloud_provider, service_category,
+       COUNT(*) as rows, ROUND(SUM(nec), 2) as total_nec
 FROM main_marts.fct_unified_billing
-GROUP BY cloud_provider;
+GROUP BY 1, 2 ORDER BY 1, 3 DESC;
 
 -- Tagging coverage by cloud
 SELECT cloud_provider,
@@ -445,27 +476,47 @@ SELECT cloud_provider, discount_type,
        ROUND(SUM(list_cost) - SUM(nec), 2) as savings
 FROM main_marts.fct_unified_billing
 GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- Commitment waste by cloud
+SELECT cloud_provider,
+       ROUND(SUM(CASE WHEN is_commitment_waste THEN nec_waste ELSE 0 END), 2) as waste_cost,
+       ROUND(SUM(nec_used), 2) as used_cost
+FROM main_marts.fct_unified_billing
+GROUP BY cloud_provider;
+
+-- Team spend with billing account context
+SELECT billing_account_id, cloud_provider, allocated_team,
+       ROUND(SUM(allocated_nec), 2) as team_nec
+FROM main_marts.fct_unified_billing
+GROUP BY 1, 2, 3 ORDER BY 4 DESC;
 ```
 
 ### Running the Full Pipeline
 
 ```bash
-# 1. Generate synthetic data + land to raw
-python load_synthetic.py --month 2026-03 --force
+# Full pipeline + dashboard in one command
+make demo
 
-# 2. Run all dbt models (staging → intermediate → marts)
-cd dbt_project
-python -m dbt.cli.main run
+# Or run steps individually
+make data       # generate synthetic data and land to data/raw/
+make dbt        # run all dbt models (staging → intermediate → marts)
+make test       # run unit tests
+make dashboard  # launch the Streamlit dashboard
 
-# 3. Query results in VS Code via SQLTools or Python
-python -c "
-import duckdb
-con = duckdb.connect('finops.duckdb')
-print(con.execute('SELECT * FROM main_marts.fct_unified_billing LIMIT 10').df())
-"
+# Override month or scenario
+make pipeline MONTH=2026-04 SCENARIO=untagged-heavy
+make data SCENARIO=ri-heavy MONTH=2026-03
 ```
 
-> Always run dbt from inside the `dbt_project/` directory — staging views use a relative path (`../data/raw/`) that resolves correctly only from there.
+> `make dbt` runs dbt from inside `dbt_project/` automatically — staging views use a relative path (`../data/raw/`) that resolves correctly only from there.
+
+To query results directly:
+
+```python
+import duckdb
+con = duckdb.connect('finops_dbt.duckdb')
+print(con.execute('SELECT * FROM main_marts.fct_unified_billing LIMIT 10').df())
+```
 
 ---
 
@@ -693,45 +744,45 @@ Division is **by functionality** — both contribute across all three hyper-scal
 ### Phase 1 — Foundation (Weeks 1–2)
 
 **Infra & Schema (Both)**
-- [ ] Create GitHub repo + branch strategy (`main`, `dev`, feature branches)
-- [ ] Agree on and document CAS schema (this doc, Section 5)
-- [ ] Set up DuckDB + dbt project skeleton (Keerthi Rapolu)
+- [x] Create GitHub repo + branch strategy (`main`, `dev`, feature branches)
+- [x] Agree on and document CAS schema (this doc, Section 5)
+- [x] Set up DuckDB + dbt project skeleton (Keerthi Rapolu)
 
 **Ingestion — all hyper-scalers**
-- [ ] Generate synthetic AWS CUR data + AWS ingestion (Rishika Naha)
-- [ ] Generate synthetic Azure Cost Export data + Azure ingestion (Keerthi Rapolu)
-- [ ] Generate synthetic GCP Billing Export data + GCP ingestion (Rishika Naha)
+- [x] Generate synthetic AWS CUR data + AWS ingestion (Rishika Naha)
+- [x] Generate synthetic Azure Cost Export data + Azure ingestion (Keerthi Rapolu)
+- [x] Generate synthetic GCP Billing Export data + GCP ingestion (Rishika Naha)
 
 **Normalization — staging models**
-- [ ] `stg_azure_cost.sql` — Azure → normalized fields (Keerthi Rapolu)
-- [ ] `stg_aws_cur.sql` — AWS → normalized fields (Rishika Naha)
-- [ ] `stg_gcp_billing.sql` — GCP → normalized fields (Rishika Naha)
+- [x] `stg_azure_cost.sql` — Azure → normalized fields (Keerthi Rapolu)
+- [x] `stg_aws_cur.sql` — AWS → normalized fields (Rishika Naha)
+- [x] `stg_gcp_billing.sql` — GCP → normalized fields (Rishika Naha)
 
 ### Phase 2 — Core Engine (Weeks 3–4)
 
 **NEC calculations per hyper-scaler (Silver layer)**
-- [ ] `int_aws_nec.sql` — AWS RI/SP amortization (Rishika Naha)
-- [ ] `int_azure_nec.sql` — Azure reservation amortization (Keerthi Rapolu)
-- [ ] `int_gcp_nec.sql` — GCP CUD amortization (Keerthi Rapolu / Rishika Naha)
+- [x] `int_aws_nec.sql` — AWS RI/SP amortization (Rishika Naha)
+- [x] `int_azure_nec.sql` — Azure reservation amortization (Keerthi Rapolu)
+- [x] `int_gcp_nec.sql` — GCP CUD amortization (Keerthi Rapolu / Rishika Naha)
 
 **Unification & Allocation (Gold layer)**
-- [ ] `fct_unified_billing.sql` — UNION ALL → CAS schema (Both)
-- [ ] NEC / RI amortization module — `allocation/nec_model.py` (Keerthi Rapolu)
-- [ ] Shared cost distribution engine — `allocation/shared_cost.py` (Keerthi Rapolu)
-- [ ] Tag-based allocation module — `allocation/tag_allocator.py` (Rishika Naha)
-- [ ] Untagged heuristic attribution — `allocation/untagged_heuristic.py` (Rishika Naha)
-- [ ] ML classifier for untagged — `allocation/untagged_ml.py` (Rishika Naha — optional)
-- [ ] Unit tests for all modules
+- [x] `fct_unified_billing.sql` — UNION ALL → CAS schema (Both)
+- [x] NEC / RI amortization module — `allocation/nec_model.py` (Keerthi Rapolu)
+- [x] Shared cost distribution engine — `allocation/shared_cost.py` (Keerthi Rapolu)
+- [x] Tag-based allocation module — `allocation/tag_allocator.py` (Rishika Naha)
+- [x] Untagged heuristic attribution — `allocation/untagged_heuristic.py` (Rishika Naha)
+- [x] ML classifier for untagged — `allocation/untagged_ml.py` (Rishika Naha — optional)
+- [x] Unit tests for all modules
 
 ### Phase 3 — Demo + Paper (Weeks 5–6)
 
 **Dashboard**
-- [ ] Streamlit dashboard — Overview + Team Allocation pages (Keerthi Rapolu)
-- [ ] Streamlit dashboard — Tagging + Shared + Untagged pages (Keerthi Rapolu)
+- [x] Streamlit dashboard — Overview + Team Allocation pages (Keerthi Rapolu)
+- [x] Streamlit dashboard — Tagging + Shared + Untagged pages (Keerthi Rapolu)
 
 **CI/CD**
-- [ ] GitHub Actions: CI pipeline (run tests on push) (Rishika Naha)
-- [ ] GitHub Actions: pipeline run (weekly schedule) (Rishika Naha)
+- [x] GitHub Actions: CI pipeline (run tests on push) (Rishika Naha)
+- [x] GitHub Actions: pipeline run (weekly schedule) (Rishika Naha)
 
 **Paper**
 - [ ] Section 2 — Background (FinOps basics, cost optimization, multi-cloud mgmt) (Rishika Naha)
@@ -778,14 +829,14 @@ rishika-naha  (light blue)
 
 Synthetic data must match the real billing format closely enough to validate the normalization logic.
 
-**AWS CUR synthetic columns (minimum):**
-`lineItem/UsageAccountId`, `lineItem/ProductCode`, `lineItem/UsageType`, `lineItem/UnblendedCost`, `lineItem/ResourceId`, `resourceTags/user:Team`, `savingsPlan/SavingsPlanEffectiveCost`, `lineItem/UsageStartDate`
+**AWS CUR synthetic columns (48 total — key ones):**
+`bill/PayerAccountId`, `lineItem/UsageAccountId`, `lineItem/LineItemType`, `lineItem/ProductCode`, `lineItem/UsageStartDate`, `lineItem/UsageEndDate`, `lineItem/ResourceId`, `lineItem/UnblendedCost`, `lineItem/BlendedCost`, `lineItem/UsageAmount`, `lineItem/NormalizationFactor`, `lineItem/NormalizedUsageAmount`, `pricing/publicOnDemandCost`, `pricing/publicOnDemandRate`, `product/vcpu`, `product/memory`, `product/instanceType`, `product/region`, `reservation/ReservationARN`, `reservation/EffectiveCost`, `reservation/UnusedQuantity`, `reservation/UnusedRecurringFee`, `reservation/UnusedAmortizedUpfrontFeeForBillingPeriod`, `savingsPlan/SavingsPlanARN`, `savingsPlan/SavingsPlanEffectiveCost`, `savingsPlan/UsedCommitment`, `savingsPlan/TotalCommitmentToDate`, `savingsPlan/RecurringCommitmentForBillingPeriod`, `resourceTags/user:Team`, `resourceTags/user:Environment`, `resourceTags/user:CostCenter`
 
-**Azure Cost Export synthetic columns (minimum):**
-`SubscriptionId`, `ResourceGroup`, `ResourceId`, `ServiceName`, `CostInBillingCurrency`, `Tags`, `Date`, `BenefitName`
+**Azure Cost Export synthetic columns (32 total — key ones):**
+`BillingAccountId`, `SubscriptionId`, `SubscriptionName`, `AccountOwnerId`, `ResourceId`, `ResourceName`, `ResourceGroup`, `ConsumedService`, `MeterCategory`, `MeterSubcategory`, `MeterName`, `MeterId`, `ServiceFamily`, `ProductName`, `ResourceLocation`, `ChargeType`, `Date`, `CostInBillingCurrency`, `BillingCurrency`, `Quantity`, `Unit`, `UnitPrice`, `PricingModel`, `EffectivePrice`, `PayGPrice`, `BenefitId`, `BenefitName`, `Tags`, `AdditionalInfo` (contains vcpus JSON)
 
-**GCP Billing Export synthetic columns (minimum):**
-`project.id`, `service.description`, `resource.name`, `cost`, `credits`, `labels`, `usage_start_time`
+**GCP Billing Export synthetic columns (27 total — key ones):**
+`billing_account_id`, `project.id`, `project.name`, `project.number`, `project.ancestry_numbers`, `service.id`, `service.description`, `sku.id`, `sku.description`, `usage_start_time`, `usage_end_time`, `location.region`, `location.zone`, `location.country`, `resource.name`, `resource.global_name`, `cost`, `cost_at_list`, `currency`, `usage.amount`, `usage.unit`, `usage.pricing_unit`, `credits`, `system_labels`, `labels`, `invoice.month`, `cost_type`
 
 ---
 

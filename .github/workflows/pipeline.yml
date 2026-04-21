@@ -1,0 +1,54 @@
+name: Pipeline
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # every Monday at 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Billing month (YYYY-MM)"
+        required: false
+        default: ""
+      scenario:
+        description: "Synthetic data scenario"
+        required: false
+        default: "normal"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Resolve billing month
+        id: month
+        run: |
+          if [ -n "${{ github.event.inputs.month }}" ]; then
+            echo "value=${{ github.event.inputs.month }}" >> $GITHUB_OUTPUT
+          else
+            echo "value=$(date +%Y-%m)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate synthetic data
+        run: |
+          python load_synthetic.py \
+            --month ${{ steps.month.outputs.value }} \
+            --scenario ${{ github.event.inputs.scenario || 'normal' }} \
+            --force
+
+      - name: Run dbt models
+        run: |
+          cd dbt_project
+          dbt run
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short

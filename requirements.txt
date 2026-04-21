@@ -1,0 +1,18 @@
+# Core data pipeline
+duckdb>=0.10
+pandas>=2.0
+pyarrow>=14.0
+pyyaml>=6.0
+
+# dbt with DuckDB adapter
+dbt-duckdb>=1.7
+
+# Dashboard
+streamlit>=1.32
+plotly>=5.20
+
+# Testing
+pytest>=8.0
+
+# ML (optional — used by allocation/untagged_ml.py)
+scikit-learn>=1.4

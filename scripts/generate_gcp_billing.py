@@ -20,10 +20,23 @@ random.seed(42)
 BILLING_ACCOUNT = "ABCDEF-123456-ABCDEF"
 
 PROJECTS = {
-    "platform-prod-001": {"name": "Platform Production", "number": "100000000001"},
-    "data-eng-prod-002": {"name": "Data Eng Production", "number": "100000000002"},
-    "app-prod-003":      {"name": "App Production",      "number": "100000000003"},
-    "ml-prod-004":       {"name": "ML Production",       "number": "100000000004"},
+    "platform-prod-001": {"name": "Platform Production", "number": "100000000001", "ancestry": "100000000001/222111000/123456789"},
+    "data-eng-prod-002": {"name": "Data Eng Production", "number": "100000000002", "ancestry": "100000000002/222111000/123456789"},
+    "app-prod-003":      {"name": "App Production",      "number": "100000000003", "ancestry": "100000000003/222111000/123456789"},
+    "ml-prod-004":       {"name": "ML Production",       "number": "100000000004", "ancestry": "100000000004/222111000/123456789"},
+}
+
+# machine type → (vCPUs, memory_gb) for system_labels
+MACHINE_SPECS = {
+    "n2-standard-2":  (2,  8),
+    "n2-standard-4":  (4,  16),
+    "n2-standard-8":  (8,  32),
+    "n2-highmem-8":   (8,  64),
+    "n2-highmem-16":  (16, 128),
+    "e2-standard-2":  (2,  8),
+    "e2-standard-4":  (4,  16),
+    "e2-micro":       (2,  1),
+    "e2-small":       (2,  2),
 }
 
 REGIONS = {
@@ -122,42 +135,47 @@ def _base(project: str, service_id: str, service_desc: str,
           hour_start: datetime, region: str,
           resource_name: str, resource_global: str,
           cost: float, usage_amount: float, usage_unit: str,
-          credits: str, team, env: str) -> dict:
+          credits: str, team, env: str,
+          system_labels: str = "[]") -> dict:
     hour_end = hour_start + timedelta(hours=1)
     return {
-        "billing_account_id":            BILLING_ACCOUNT,
-        "service.id":                    service_id,
-        "service.description":           service_desc,
-        "sku.id":                        sku_id,
-        "sku.description":               sku_desc,
-        "usage_start_time":              hour_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "usage_end_time":                hour_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "project.id":                    project,
-        "project.name":                  PROJECTS[project]["name"],
-        "project.number":                PROJECTS[project]["number"],
-        "labels":                        _labels(team, env),
-        "system_labels":                 "[]",
-        "location.location":             region,
-        "location.country":              REGIONS.get(region, "US"),
-        "location.region":               region,
-        "location.zone":                 "",
-        "resource.name":                 resource_name,
-        "resource.global_name":          resource_global,
-        "cost":                          cost,
-        "currency":                      "USD",
-        "currency_conversion_rate":      1.0,
-        "usage.amount":                  usage_amount,
-        "usage.unit":                    usage_unit,
-        "usage.amount_in_pricing_units": usage_amount,
-        "usage.pricing_unit":            usage_unit,
-        "credits":                       credits,
-        "invoice.month":                 hour_start.strftime("%Y%m"),
-        "cost_type":                     "regular",
-        "adjustment_info.id":            "",
-        "adjustment_info.description":   "",
-        "adjustment_info.mode":          "",
-        "adjustment_info.type":          "",
+        "billing_account_id":   BILLING_ACCOUNT,
+        "service.id":           service_id,
+        "service.description":  service_desc,
+        "sku.id":               sku_id,
+        "sku.description":      sku_desc,
+        "usage_start_time":     hour_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "usage_end_time":       hour_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "project.id":           project,
+        "project.name":         PROJECTS[project]["name"],
+        "project.number":       PROJECTS[project]["number"],
+        "project.ancestry_numbers": PROJECTS[project]["ancestry"],
+        "labels":               _labels(team, env),
+        "system_labels":        system_labels,
+        "location.region":      region,
+        "location.zone":        "",
+        "location.country":     REGIONS.get(region, "US"),
+        "resource.name":        resource_name,
+        "resource.global_name": resource_global,
+        "cost":                 cost,
+        "cost_at_list":         cost,
+        "currency":             "USD",
+        "usage.amount":         usage_amount,
+        "usage.unit":           usage_unit,
+        "usage.pricing_unit":   usage_unit,
+        "credits":              credits,
+        "invoice.month":        hour_start.strftime("%Y%m"),
+        "cost_type":            "regular",
     }
+
+
+def _gce_system_labels(machine: str) -> str:
+    cores, mem_gb = MACHINE_SPECS.get(machine, (0, 0))
+    return json.dumps([
+        {"key": "compute_cores",            "value": str(cores)},
+        {"key": "compute_memory",           "value": str(mem_gb)},
+        {"key": "is_unused_reservation",    "value": "false"},
+    ])
 
 
 def gce_row(project: str, region: str, zone_sfx: str, machine: str,
@@ -181,6 +199,7 @@ def gce_row(project: str, region: str, zone_sfx: str, machine: str,
         f"projects/{project}/zones/{zone}/instances/{vm_name}",
         f"//compute.googleapis.com/projects/{project}/zones/{zone}/instances/{vm_name}",
         cost, 1.0, "hour", credits, team, env,
+        system_labels=_gce_system_labels(machine),
     )
 
 

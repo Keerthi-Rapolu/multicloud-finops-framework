@@ -166,9 +166,9 @@ def stage_validate(billing_month: str) -> dict[str, list[str]]:
     ]
 
     for cloud, syn_dir, required, date_col in checks:
-        csv_files = _csv_files(syn_dir)
+        csv_files = [f for f in _csv_files(syn_dir) if billing_month in f.name]
         if not csv_files:
-            all_errors[cloud] = [f"[{cloud}] No CSV files found in {syn_dir}"]
+            all_errors[cloud] = [f"[{cloud}] No CSV files found in {syn_dir} for {billing_month}"]
             continue
 
         cloud_errors = []
@@ -197,10 +197,15 @@ def stage_land(billing_month: str) -> dict[str, int]:
     for cloud, ingest_fn, raw_root in clouds:
         month_dir = raw_root / billing_month
 
-        # Delete existing raw for this month before re-landing
+        # Remove existing raw files for this month before re-landing.
+        # Use per-file deletion so a locked file (e.g. open DuckDB connection)
+        # is skipped rather than aborting the whole rmtree.
         if month_dir.exists():
-            shutil.rmtree(month_dir)
-            logger.info("  %s: deleted existing raw at %s", cloud, month_dir)
+            for f in month_dir.iterdir():
+                try:
+                    f.unlink()
+                except PermissionError:
+                    logger.warning("  %s: skipped locked file %s — will be overwritten", cloud, f.name)
 
         result = ingest_fn()
         rows   = sum(result.values())
