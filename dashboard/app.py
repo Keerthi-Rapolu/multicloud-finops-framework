@@ -69,8 +69,8 @@ st.session_state["cloud"] = selected_cloud
 # Home page
 # ---------------------------------------------------------------------------
 
-st.title("Multi-Cloud FinOps Cost Attribution Framework")
-st.caption("Research demo — Keerthi Rapolu & Rishika Naha, April 2026")
+st.title("AI-Ready Multi-Cloud FinOps Cost Attribution & Allocation Framework")
+st.caption("Research demo — Keerthi Rapolu & Rishika Naha, April 2026 · Synthetic dataset for demo purposes")
 
 summary = nec_by_cloud(df)
 total_list = summary["list_cost"].sum()
@@ -87,6 +87,7 @@ c4.metric("Commitment Waste", f"${total_waste:,.0f}")
 
 st.markdown("---")
 st.subheader("Spend by cloud")
+st.caption(":information_source: Synthetic dataset — cloud distribution does not reflect real-world proportions.")
 
 fig = go.Figure([
     go.Bar(name="NEC (used)", x=summary["cloud_provider"], y=summary["nec"],       marker_color="#2563eb"),

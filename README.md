@@ -1,4 +1,4 @@
-# Multi-Cloud FinOps Cost Attribution Framework
+# AI-Ready Multi-Cloud FinOps Cost Attribution & Allocation Framework
 
 > **An open-source, data-engineering-native framework for normalizing, allocating, and visualizing cloud costs across AWS, Azure, and GCP — with zero paid tooling.**
 
@@ -364,11 +364,13 @@ The Streamlit dashboard has 5 pages — run it with `make dashboard` after `make
 
 | Page | What it shows |
 |---|---|
-| **Overview** | Total spend by cloud, month-over-month trend, NEC vs list cost savings |
-| **Team Allocation** | Per-team NEC table, RI/SP utilization, shared cost breakdown |
-| **Tagging Coverage** | % tagged by cloud, service, and account — identifies attribution gaps |
-| **Shared Costs** | Distribution of shared infra costs across teams by strategy |
-| **Untagged Resources** | Heuristic attribution confidence scores, unresolved rows |
+| **Overview** | Total spend by cloud; daily NEC trend with anomaly markers; savings by pricing model (on_demand / RI / SP); top commitment waste contributors; 3-metric insight callouts |
+| **Team Allocation** | Per-team NEC table, RI/SP utilization rate, idle commitment waste detail |
+| **Tagging Coverage** | Tagged % by cloud, service, and account; top untagged accounts with owner-missing flag; top services contributing to the tagging gap |
+| **Shared Costs** | Distribution of shared-infra costs across teams by strategy (proportional / even / weighted) with inline strategy explanations |
+| **Untagged Resources** | Untagged NEC at risk; service breakdown with % of untagged NEC; untagged trend over time; account table with Priority (High / Medium / Low) and owner-missing flag |
+
+> All data is synthetic — cloud distribution does not reflect real-world proportions.
 
 > GitHub README does not support embedded interactive content. To try the live dashboard, run `make demo` locally or deploy the `dashboard/` folder to [Streamlit Community Cloud](https://streamlit.io/cloud) for free.
 

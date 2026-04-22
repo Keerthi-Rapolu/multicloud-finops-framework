@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 st.set_page_config(page_title="Tagging Coverage", layout="wide")
 st.title("Tagging Coverage")
 st.caption(
-    "A resource is 'tagged' when `tag_team` is non-null. "
-    "Untagged NEC cannot be directly attributed to a team."
+    "Resources without team tags cannot be attributed and require allocation heuristics. "
+    "A resource is 'tagged' when `tag_team` is non-null."
 )
 
 df = st.session_state.get("df")
@@ -48,18 +48,26 @@ def _coverage(frame, group_col: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Overall KPIs
+# Overall KPIs — Untagged NEC made visually prominent
 # ---------------------------------------------------------------------------
 
 is_tagged = df["is_tagged"].fillna(False)
 overall_row_pct = is_tagged.mean() * 100
 overall_nec_pct = df.loc[is_tagged, "nec"].sum() / df["nec"].sum() * 100 if df["nec"].sum() else 0
 untagged_nec = df.loc[~is_tagged, "nec"].sum()
+untagged_nec_pct = 100 - overall_nec_pct
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Tagged rows",       f"{overall_row_pct:.1f}%")
-c2.metric("Tagged NEC",        f"{overall_nec_pct:.1f}%")
-c3.metric("Untagged NEC at risk", f"${untagged_nec:,.2f}")
+c1, c2, c3 = st.columns([1, 1, 1])
+c1.metric("Tagged rows",          f"{overall_row_pct:.1f}%")
+c2.metric("Tagged NEC",           f"{overall_nec_pct:.1f}%")
+c3.metric("Untagged NEC at risk", f"${untagged_nec:,.2f}",
+          delta=f"{untagged_nec_pct:.1f}% unattributed", delta_color="inverse")
+
+if untagged_nec_pct >= 10:
+    st.warning(
+        f":warning: **{untagged_nec_pct:.1f}% of NEC (${untagged_nec:,.0f}) is untagged** — "
+        "cannot be directly charged to a team without heuristic allocation."
+    )
 
 st.markdown("---")
 
@@ -115,6 +123,71 @@ fig_svc = px.bar(
 fig_svc.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
 fig_svc.update_layout(height=320, coloraxis_showscale=False, margin=dict(t=10, b=40))
 st.plotly_chart(fig_svc, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Top untagged accounts — who needs to act?
+# ---------------------------------------------------------------------------
+
+st.markdown("---")
+st.subheader("Top untagged accounts")
+st.caption("Accounts with the highest untagged NEC — these owners need to apply team tags.")
+
+untagged_df = df[~df["is_tagged"].fillna(False)]
+if untagged_df.empty:
+    st.success("No untagged accounts.")
+else:
+    top_acct = (
+        untagged_df.groupby(["cloud_provider", "account_id"])
+        .agg(untagged_nec=("nec", "sum"), untagged_rows=("nec", "count"))
+        .reset_index()
+        .sort_values("untagged_nec", ascending=False)
+        .head(10)
+    )
+    top_acct["untagged_nec_pct"] = (top_acct["untagged_nec"] / untagged_nec * 100).round(1)
+    top_acct["Owner / team"] = "⚠ owner missing"
+
+    disp_acct = top_acct[["cloud_provider", "account_id", "untagged_rows",
+                            "untagged_nec", "untagged_nec_pct", "Owner / team"]].copy()
+    disp_acct.columns = ["Cloud", "Account", "Untagged rows", "Untagged NEC", "% of untagged", "Owner / team"]
+    disp_acct["Untagged NEC"] = disp_acct["Untagged NEC"].map("${:,.2f}".format)
+    disp_acct["% of untagged"] = disp_acct["% of untagged"].map("{:.1f}%".format)
+    st.dataframe(disp_acct, use_container_width=True, hide_index=True)
+
+# ---------------------------------------------------------------------------
+# Top services with missing tags
+# ---------------------------------------------------------------------------
+
+st.markdown("---")
+st.subheader("Top services with missing tags")
+st.caption("Services that contribute the most to unattributed NEC.")
+
+if not untagged_df.empty:
+    top_svc = (
+        untagged_df.groupby(["cloud_provider", "service_name"])
+        .agg(untagged_nec=("nec", "sum"), untagged_rows=("nec", "count"))
+        .reset_index()
+        .sort_values("untagged_nec", ascending=False)
+        .head(10)
+    )
+    top_svc["pct_of_untagged"] = (top_svc["untagged_nec"] / untagged_nec * 100).round(1)
+
+    fig_top_svc = px.bar(
+        top_svc, x="untagged_nec", y="service_name", color="cloud_provider",
+        orientation="h",
+        color_discrete_map={"aws": "#f97316", "azure": "#2563eb", "gcp": "#22c55e"},
+        labels={
+            "untagged_nec": "Untagged NEC (USD)",
+            "service_name": "Service",
+            "cloud_provider": "Cloud",
+        },
+        text="pct_of_untagged",
+    )
+    fig_top_svc.update_traces(texttemplate="%{text:.1f}% of untagged", textposition="outside")
+    fig_top_svc.update_layout(
+        height=360, margin=dict(t=10, b=40),
+        yaxis={"categoryorder": "total ascending"},
+    )
+    st.plotly_chart(fig_top_svc, use_container_width=True)
 
 # ---------------------------------------------------------------------------
 # By account / subscription / project

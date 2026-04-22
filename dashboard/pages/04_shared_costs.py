@@ -45,9 +45,19 @@ with col_ctrl1:
         help=(
             "**proportional** — teams that spend more absorb more shared cost\n\n"
             "**even** — equal split regardless of size\n\n"
-            "**weighted** — uses contractual weights from config"
+            "**weighted** — fixed % shares defined per team in `config/shared_cost_weights.yml`; "
+            "useful when cost ownership is governed by contract or headcount rather than usage"
         ),
     )
+
+with col_ctrl1:
+    strategy_notes = {
+        "proportional": "Each team's share scales with its total NEC — bigger spenders absorb more.",
+        "even":         "Shared cost split equally across all teams regardless of size.",
+        "weighted":     "Shares are fixed in `config/shared_cost_weights.yml` (e.g. by headcount or contract). "
+                        "Edit that file to adjust per-team weights.",
+    }
+    st.caption(f":bulb: {strategy_notes[strategy]}")
 
 # ---------------------------------------------------------------------------
 # Run distribution
@@ -123,7 +133,7 @@ else:
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col_tbl:
-        team_alloc["allocated_nec"] = team_alloc["allocated_nec"].map("${:,.4f}".format)
+        team_alloc["allocated_nec"] = team_alloc["allocated_nec"].map("${:,.2f}".format)
         team_alloc.columns = ["Team", "Allocated NEC"]
         st.dataframe(team_alloc, use_container_width=True, hide_index=True)
 
@@ -136,6 +146,6 @@ with st.expander("Shared-cost rows detail"):
     raw_shared = df[candidate_mask][
         ["cloud_provider", "service_name", "account_id", "nec", "usage_date"]
     ].copy()
-    raw_shared["nec"] = raw_shared["nec"].map("${:,.4f}".format)
+    raw_shared["nec"] = raw_shared["nec"].map("${:,.2f}".format)
     raw_shared.columns = ["Cloud", "Service", "Account", "NEC", "Date"]
     st.dataframe(raw_shared, use_container_width=True, hide_index=True)
