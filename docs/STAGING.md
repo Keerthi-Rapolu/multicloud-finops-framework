@@ -48,7 +48,7 @@ Staging models read raw Parquet files, standardize schema, and prepare clean row
 - Derives `is_commitment_waste` — true for `UnusedReservation` / `UnusedSavingsPlan` rows (RI/SP capacity that ran idle but still incurred cost)
 - Cost is already **amortized** at source (RI/SP upfront spread daily); `int_azure_nec` splits it into `nec_used` vs `nec_waste` and computes `effective_unit_price`
 
-**Row filter:** `ChargeType in ('Usage', 'UnusedReservation', 'UnusedSavingsPlan')`
+**Row filter:** `ChargeType in ('Usage', 'UnusedReservation', 'UnusedSavingsPlan')` — Purchase (upfront RI buy), Tax, and Adjustment rows are excluded intentionally: they represent billing events, not resource consumption, and would distort NEC calculations.
 
 > Azure's amortized vs actual export distinction, RI/SP daily row mechanics, shared cost spreading,
 > and effective vs PAYG price semantics are explained in full in [AZURE_COST_REFERENCE.md](AZURE_COST_REFERENCE.md).

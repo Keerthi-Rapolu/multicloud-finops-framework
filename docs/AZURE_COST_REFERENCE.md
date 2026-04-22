@@ -276,6 +276,9 @@ to that subscription in the `sub_teams` CTE:
 -- sub_teams maps subscription → benefiting teams
 -- team-owned subscription: 1 team  → allocated_nec = full nec_used
 -- shared subscription:     5 teams → allocated_nec = nec_used / 5
+--
+-- DEMO ONLY: subscription UUIDs are hardcoded to match the synthetic dataset.
+-- For real data, replace with a dbt seed (seeds/azure_sub_teams.csv).
 ```
 
 Tagged rows pass through unchanged: `allocated_team = tag_team`, `allocated_nec = nec_used`, `is_shared_cost = false`.

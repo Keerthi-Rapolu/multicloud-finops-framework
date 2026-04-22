@@ -241,7 +241,7 @@ Discount scales linearly up to **30% at 100% usage**. No RI/SP purchase needed.
 | `credits_raw` | `[{"type": "SUSTAINED_USE_DISCOUNT", "amount": -0.0365}]` | ~20% SUD credit for this hour |
 | `total_credit_amount` | `-0.0365` | Discount amount (negative) |
 | `net_cost` | `0.1461` | Effective cost after SUD |
-| `discount_type` (int layer) | `'sp'` | SUD mapped to `sp` (analogous to SP — automatic commitment-style discount) |
+| `discount_type` (int layer) | `'on_demand'` | SUD requires no commitment, so it maps to `on_demand`. Savings are captured in `nec_used` via `total_credit_amount` but SUD is not surfaced as a distinct discount type — see [NEC_CALCULATIONS.md](NEC_CALCULATIONS.md) for the known limitation note. |
 
 #### CUD + SUD on the same row
 
@@ -268,7 +268,7 @@ Both can appear simultaneously if a VM has a CUD and also qualifies for SUD:
 | Purchase required | Yes — 1-year or 3-year commitment | No — applied automatically by GCP |
 | Discount rate | ~37% (1-yr), ~55% (3-yr) | Up to 30% at 100% monthly usage |
 | Credit type in export | `COMMITTED_USAGE_DISCOUNT` | `SUSTAINED_USE_DISCOUNT` |
-| `discount_type` in mart | `'ri'` | `'sp'` |
+| `discount_type` in mart | `'ri'` | `'on_demand'` (no commitment → not surfaced as `sp`) |
 | Applies to | Specific resource type + region | Any GCE VM (not Cloud SQL) |
 | Waste if idle | `is_unused_reservation = true` on that hour | N/A — no commitment to waste |
 | Can both apply? | Yes — credits stack on the same row | Yes |
