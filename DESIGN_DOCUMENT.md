@@ -233,11 +233,11 @@ models/
 **Tool:** Streamlit (free tier deploy on Streamlit Cloud)
 
 **Pages:**
-1. Overview — total spend by cloud, trend chart
-2. Team Allocation — per-team cost table, NEC vs list cost
-3. Tagging Coverage — % tagged by cloud, service, account
-4. Shared Cost — distribution breakdown
-5. Untagged Resources — heuristic attribution confidence
+1. Overview — 5 KPI tiles (list cost, NEC, savings, waste, waste %); daily NEC trend with z-score anomaly markers; NEC by service category (donut); savings by pricing model (on_demand / RI / SP grouped bar); top commitment waste contributors (horizontal bar); cloud summary table; 3 insight callouts (cloud dominance, tagging gap NEC, top team)
+2. Team Allocation — NEC by team bar chart; NEC vs list cost grouped bar by team and cloud; RI/SP commitment utilization % with 100% target line; idle commitment waste detail table
+3. Tagging Coverage — tagged % by cloud / service / account; top untagged accounts with owner-missing flag; top services driving the tagging gap with % labels
+4. Shared Costs — proportional / even / weighted distribution with inline strategy explanations; weighted = fixed weights from `config/shared_cost_weights.yml`
+5. Untagged Resources — Untagged NEC trend over time; service breakdown with % of untagged NEC; account table with Priority (High/Medium/Low) and owner-missing flag
 
 ---
 
