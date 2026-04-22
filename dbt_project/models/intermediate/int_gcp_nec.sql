@@ -80,8 +80,12 @@ nec as (
         -- net_cost already computed in staging (same formula, kept for convenience)
         net_cost,
 
-        -- Discount type: CUD is a fixed-term commitment (→ 'ri').
-        -- SUD is automatic, no commitment made (→ 'on_demand', not 'sp').
+        -- Discount type: CUD is a fixed-term commitment, mapped to 'ri' to align with
+        -- AWS Reserved Instance semantics in the unified schema.
+        -- SUD (Sustained Use Discount) is automatic and requires no commitment, so it
+        -- maps to 'on_demand' rather than 'sp'. This is a known simplification: SUD savings
+        -- are captured in nec_used via total_credit_amount but are not surfaced as a distinct
+        -- discount_type. Noted in paper Section 5 as a GCP-specific modeling constraint.
         case
             when credits_raw like '%COMMITTED_USAGE_DISCOUNT%' then 'ri'
             else                                                    'on_demand'

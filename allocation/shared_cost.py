@@ -125,11 +125,11 @@ class SharedCostDistributor:
         if shared_df.empty:
             return df.copy()
 
-        # Proportional shares are derived from tagged non-shared direct spend.
+        # Pre-compute all three share dicts once — results are identical for every row.
         tagged_direct = direct_df[direct_df["is_tagged"].fillna(False)]
-        proportional_shares = self._compute_shares(
-            "proportional", resolved_teams, tagged_direct
-        )
+        proportional_shares = self._compute_shares("proportional", resolved_teams, tagged_direct)
+        weighted_shares     = self._compute_shares("weighted",     resolved_teams, tagged_direct)
+        even_shares         = self._compute_shares("even",         resolved_teams, tagged_direct)
 
         fanned: list[pd.DataFrame] = []
 
@@ -141,9 +141,9 @@ class SharedCostDistributor:
             if strategy == "proportional":
                 shares = proportional_shares
             elif strategy == "weighted":
-                shares = self._compute_shares("weighted", resolved_teams, tagged_direct)
+                shares = weighted_shares
             else:
-                shares = self._compute_shares("even", resolved_teams, tagged_direct)
+                shares = even_shares
 
             fanned.append(_fanout_row(row, shares))
 

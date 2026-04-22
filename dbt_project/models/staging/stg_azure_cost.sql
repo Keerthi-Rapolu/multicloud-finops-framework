@@ -95,6 +95,9 @@ staged as (
         'azure'                                                                 as cloud_provider
 
     from source
+    -- Keep only rows relevant to NEC: actual usage and unused commitment capacity.
+    -- Purchase (upfront RI buy), Tax, and Adjustment rows are excluded intentionally —
+    -- they represent billing events, not resource consumption, and distort NEC calculations.
     where ChargeType in ('Usage', 'UnusedReservation', 'UnusedSavingsPlan')
 )
 
