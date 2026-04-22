@@ -165,6 +165,7 @@ Individual flags override scenario values when combined.
 | Scenario | untagged | RI | SP | Use case |
 |---|---|---|---|---|
 | `normal` | 15% | 20% | 15% | Default development run |
+| `untagged-medium` | 35% | 20% | 15% | Moderate tagging gap — used for April demo data |
 | `untagged-heavy` | 55% | 20% | 15% | Test untagged attribution logic |
 | `ri-heavy` | 15% | 60% | 10% | Test RI amortization |
 | `sp-heavy` | 15% | 10% | 60% | Test Savings Plan logic |

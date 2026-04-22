@@ -99,6 +99,7 @@ flowchart TD
 ## Quick Start
 
 **Prerequisites:** Python 3.11+, `pip install -r requirements.txt`, dbt installed via pip
+> **Windows:** `make` is not built in. Install it once with `winget install GnuWin32.Make`, then add `C:\Program Files (x86)\GnuWin32\bin` to your PATH.
 
 ```bash
 # Clone and install

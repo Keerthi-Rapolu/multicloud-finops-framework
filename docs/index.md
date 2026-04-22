@@ -31,7 +31,8 @@ make test       # run unit tests
 make dashboard  # launch the Streamlit dashboard
 
 # Override month or scenario
-make pipeline MONTH=2026-04 SCENARIO=untagged-heavy
+make pipeline MONTH=2026-04 SCENARIO=untagged-medium   # 35% untagged
+make pipeline MONTH=2026-04 SCENARIO=untagged-heavy    # 55% untagged
 ```
 
 ---
