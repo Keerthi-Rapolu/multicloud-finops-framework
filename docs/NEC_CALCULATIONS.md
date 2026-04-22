@@ -272,7 +272,7 @@ It never re-derives NEC — all formulas live in the dbt models.
 | `nec_by_cloud(df)` | Total NEC, list cost, waste, savings % by cloud |
 | `nec_by_team(df)` | Per-team NEC using `allocated_nec` (reflects Azure fan-out) |
 | `nec_by_service_category(df)` | NEC by service category and cloud |
-| `nec_trend(df, freq)` | Daily / weekly / monthly NEC trend |
+| `nec_trend(df, freq)` | Daily / weekly / monthly NEC trend — rows with null `usage_date` are dropped before aggregation (GCP rows can have null `usage_start_time`) |
 | `commitment_utilization(df)` | `nec_used / (nec_used + nec_waste)` by cloud and discount type |
 | `savings_vs_on_demand(df)` | `list_cost − nec_used` by cloud and discount type |
 | `commitment_waste_detail(df)` | Individual rows where `is_commitment_waste = true` |
