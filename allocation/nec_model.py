@@ -136,7 +136,7 @@ def nec_trend(df: pd.DataFrame, freq: str = "D") -> pd.DataFrame:
     """
     trend = (
         df.dropna(subset=["usage_date"])
-        .assign(period=pd.to_datetime(df["usage_date"]).dt.to_period(freq))
+        .assign(period=lambda x: pd.to_datetime(x["usage_date"]).dt.to_period(freq))
         .groupby(["period", "cloud_provider"])
         .agg(nec=("nec", "sum"), list_cost=("list_cost", "sum"))
         .reset_index()
