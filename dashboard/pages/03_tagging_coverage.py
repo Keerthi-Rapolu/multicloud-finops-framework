@@ -66,7 +66,10 @@ c3.metric("Untagged NEC at risk", f"${untagged_nec:,.2f}",
 if untagged_nec_pct >= 10:
     st.warning(
         f":warning: **{untagged_nec_pct:.1f}% of NEC (${untagged_nec:,.0f}) is untagged** — "
-        "cannot be directly charged to a team without heuristic allocation."
+        "cannot be directly charged to a team without heuristic allocation.  \n"
+        "**Recommendation:** Enforce a mandatory `tag_team` field at resource creation "
+        "via AWS Tag Policies, Azure Policy, or GCP Organization Policy. "
+        "Target: reduce untagged NEC below 5% within 60 days."
     )
 
 st.markdown("---")
@@ -130,7 +133,10 @@ st.plotly_chart(fig_svc, use_container_width=True)
 
 st.markdown("---")
 st.subheader("Top untagged accounts")
-st.caption("Accounts with the highest untagged NEC — these owners need to apply team tags.")
+st.caption(
+    "Accounts with the highest untagged NEC — these owners need to apply team tags.  \n"
+    "**Recommendation:** Contact the account owner of each High-priority account and assign a remediation deadline."
+)
 
 untagged_df = df[~df["is_tagged"].fillna(False)]
 if untagged_df.empty:
@@ -159,7 +165,10 @@ else:
 
 st.markdown("---")
 st.subheader("Top services with missing tags")
-st.caption("Services that contribute the most to unattributed NEC.")
+st.caption(
+    "Services that contribute the most to unattributed NEC.  \n"
+    "**Recommendation:** Prioritize tagging the top 3 services — they likely represent the majority of the attribution gap."
+)
 
 if not untagged_df.empty:
     top_svc = (

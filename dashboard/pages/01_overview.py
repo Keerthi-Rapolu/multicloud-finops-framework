@@ -43,7 +43,7 @@ waste_pct   = total_waste / total_nec * 100 if total_nec else 0
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Total List Cost",    f"${total_list:,.2f}")
 c2.metric("Net Effective Cost", f"${total_nec:,.2f}")
-c3.metric("Discount Savings",   f"${total_list - total_nec:,.2f}",
+c3.metric("Savings (vs List Cost)", f"${total_list - total_nec:,.2f}",
           delta=f"{(total_list - total_nec) / total_list * 100:.1f}%")
 c4.metric("Commitment Waste",   f"${total_waste:,.2f}")
 c5.metric("Waste %",            f"{waste_pct:.1f}%", delta_color="inverse",
@@ -98,6 +98,11 @@ else:
 
     fig_trend.update_layout(height=320, margin=dict(t=10, b=40))
     st.plotly_chart(fig_trend, use_container_width=True)
+    st.caption(
+        ":mag: **Anomaly markers** (open circles) indicate dates where NEC deviated more than 1.8 standard "
+        "deviations from the per-cloud mean — likely caused by burst usage, RI underutilization, or "
+        "synthetic data variability in this demo."
+    )
 
 # ---------------------------------------------------------------------------
 # Service category breakdown + pricing-model savings side by side
@@ -182,14 +187,21 @@ for col in ["List Cost", "NEC", "Waste", "Savings"]:
 display["Savings %"] = display["Savings %"].map("{:.1f}%".format)
 st.dataframe(display, use_container_width=True, hide_index=True)
 
+_TEAM_LABELS = {
+    "data-eng": "Data Engineering", "platform": "Platform", "frontend": "Frontend",
+    "backend": "Backend", "ml": "Machine Learning",
+}
+
+def _fmt_team(name: str) -> str:
+    return _TEAM_LABELS.get(str(name).lower(), str(name).replace("-", " ").title())
+
 # ---------------------------------------------------------------------------
-# Insight callouts
+# Insight callouts — observation + recommended action
 # ---------------------------------------------------------------------------
 
 st.markdown("---")
-st.subheader("Key insights")
+st.subheader("Key insights & recommendations")
 
-# Cloud dominance
 if not by_cloud.empty:
     top_cloud = by_cloud.loc[by_cloud["nec"].idxmax()]
     top_cloud_pct = top_cloud["nec"] / total_nec * 100
@@ -197,28 +209,33 @@ if not by_cloud.empty:
     col_i1, col_i2, col_i3 = st.columns(3)
 
     col_i1.info(
-        f"**{top_cloud['cloud_provider'].upper()}** accounts for "
-        f"**{top_cloud_pct:.0f}%** of total NEC "
-        f"(${top_cloud['nec']:,.0f})."
+        f"**{top_cloud['cloud_provider'].upper()} accounts for {top_cloud_pct:.0f}% of "
+        f"total NEC** (${top_cloud['nec']:,.0f}).  \n"
+        f"**Recommendation:** Review {top_cloud['cloud_provider'].upper()} commitment "
+        "coverage — consolidating RI/SP purchases can reduce on-demand exposure."
     )
 
-    # Tagging gap
     untagged_nec = df.loc[~df["is_tagged"].fillna(False), "nec"].sum()
+    untagged_nec_pct = untagged_nec / total_nec * 100 if total_nec else 0
     col_i2.warning(
-        f"**Tagging gap** exposes **${untagged_nec:,.0f}** in unallocated NEC "
-        "that falls back to heuristics."
+        f"**Tagging gap exposes ${untagged_nec:,.0f} ({untagged_nec_pct:.0f}% of NEC)** "
+        f"that cannot be directly attributed to a team.  \n"
+        "**Recommendation:** Enforce a mandatory `tag_team` policy at resource creation "
+        "via AWS Tag Policies, Azure Policy, or GCP Organization Policy."
     )
 
-    # Top team
     try:
         by_team = nec_by_team(df)
         team_totals = by_team.groupby("team")["nec"].sum()
         if not team_totals.empty:
-            top_team = team_totals.idxmax()
+            top_team_key = team_totals.idxmax()
+            top_team_label = _fmt_team(top_team_key)
             top_team_pct = team_totals.max() / total_nec * 100
             col_i3.info(
-                f"**{top_team}** drives **{top_team_pct:.0f}%** of total NEC "
-                f"(${team_totals.max():,.0f})."
+                f"**{top_team_label} accounts for {top_team_pct:.0f}% of total NEC** "
+                f"(${team_totals.max():,.0f}).  \n"
+                f"**Recommendation:** Schedule a cost review with the {top_team_label} team — "
+                "prioritize right-sizing compute and expanding commitment coverage for their top services."
             )
     except Exception:
         pass

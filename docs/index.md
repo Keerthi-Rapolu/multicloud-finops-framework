@@ -85,7 +85,7 @@ GCP   nec = GREATEST(list_cost + total_credit_amount, 0)
 ```
 
 ### Shared cost distribution
-Unowned shared-infrastructure rows (networking, logging, security) are spread across teams using one of three configurable strategies: **proportional** (by direct spend), **even** (equal split), or **weighted** (fixed % shares defined in `config/shared_cost_weights.yml` — useful when cost ownership is governed by contract or headcount rather than usage).
+Unowned shared-infrastructure rows (networking, logging, security) are spread across teams using one of three configurable strategies: **proportional** (by direct spend), **even** (equal split), or **weighted** (fixed % shares by business unit — Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10% — defined in `config/shared_cost_weights.yml`; appropriate when cost ownership is governed by headcount or negotiated SLA rather than usage).
 
 ### Unified Cost Allocation Schema (CAS)
 A 31-column normalized schema that every cloud's billing data is mapped to. Key columns: `cloud_provider`, `billing_month`, `account_id`, `service_category`, `list_cost`, `nec`, `nec_used`, `nec_waste`, `discount_type`, `tag_team`, `allocated_team`, `allocated_nec`, `is_shared_cost`, `is_commitment_waste`.

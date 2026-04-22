@@ -360,15 +360,16 @@ Alternatively, connect via **SQLTools + DuckDB Sql Tools** in VS Code — point 
 
 ## Dashboard
 
-The Streamlit dashboard has 5 pages — run it with `make dashboard` after `make dbt`:
+The Streamlit dashboard has a home page plus 5 detail pages — run with `make dashboard` after `make dbt`:
 
-| Page | What it shows |
+| Surface | What it shows |
 |---|---|
-| **Overview** | Total spend by cloud; daily NEC trend with anomaly markers; savings by pricing model (on_demand / RI / SP); top commitment waste contributors; 3-metric insight callouts |
+| **Home (executive summary)** | Portfolio KPIs; spend-by-cloud stacked bar; traffic-light health signals for commitment waste %, tagging gap %, and top cost centre; navigation guidance |
+| **Overview** | 5 KPI tiles (list cost, NEC, savings vs list cost, waste, waste %); daily NEC trend with z-score anomaly markers and explanation; savings by pricing model (on_demand / RI / SP); top commitment waste contributors; cloud summary table; 3 insight callouts with actionable recommendations |
 | **Team Allocation** | Per-team NEC table, RI/SP utilization rate, idle commitment waste detail |
-| **Tagging Coverage** | Tagged % by cloud, service, and account; top untagged accounts with owner-missing flag; top services contributing to the tagging gap |
-| **Shared Costs** | Distribution of shared-infra costs across teams by strategy (proportional / even / weighted) with inline strategy explanations |
-| **Untagged Resources** | Untagged NEC at risk; service breakdown with % of untagged NEC; untagged trend over time; account table with Priority (High / Medium / Low) and owner-missing flag |
+| **Tagging Coverage** | Tagged % by cloud, service, and account; enforcement alert when untagged NEC ≥ 10%; top untagged accounts with owner-missing flag; top services driving the attribution gap with % labels; per-section recommendations |
+| **Shared Costs** | Distribution by strategy (proportional / even / weighted); weighted uses configured business-unit weights (Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%); per-strategy recommendation |
+| **Untagged Resources** | Untagged NEC trend over time; service breakdown with % of untagged NEC; account table with explicit Priority thresholds (High = >15% of untagged NEC and ≥30% own untagged rate; Medium = 5–15%; Low = <5%) and owner-missing flag; per-section recommendations |
 
 > All data is synthetic — cloud distribution does not reflect real-world proportions.
 

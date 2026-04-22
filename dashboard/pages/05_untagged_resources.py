@@ -128,7 +128,11 @@ st.plotly_chart(fig_svc, use_container_width=True)
 
 st.markdown("---")
 st.subheader("Untagged NEC trend over time")
-st.caption("Is the tagging gap improving or getting worse?")
+st.caption(
+    "Is the tagging gap improving or getting worse?  \n"
+    "**Recommendation:** A flat or rising trend indicates the tagging policy is not being enforced — "
+    "escalate to the platform team and block untagged resource deployment via CI/CD gates."
+)
 
 if "usage_date" in untagged.columns:
     trend = (
@@ -158,6 +162,13 @@ else:
 
 st.markdown("---")
 st.subheader("Worst-offending accounts")
+st.caption(
+    "**Priority legend:** "
+    "**High** = account contributes >15% of total untagged NEC AND has ≥30% of its own NEC untagged — immediate action required. "
+    "**Medium** = contributes 5–15% of untagged NEC. "
+    "**Low** = contributes <5% of untagged NEC.  \n"
+    "**Recommendation:** Assign remediation owners to all High-priority accounts within this sprint."
+)
 
 by_acct = (
     df.groupby(["cloud_provider", "account_id"])

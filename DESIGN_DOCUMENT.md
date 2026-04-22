@@ -232,12 +232,14 @@ models/
 
 **Tool:** Streamlit (free tier deploy on Streamlit Cloud)
 
-**Pages:**
-1. Overview — 5 KPI tiles (list cost, NEC, savings, waste, waste %); daily NEC trend with z-score anomaly markers; NEC by service category (donut); savings by pricing model (on_demand / RI / SP grouped bar); top commitment waste contributors (horizontal bar); cloud summary table; 3 insight callouts (cloud dominance, tagging gap NEC, top team)
+**Home page (`app.py`):** Portfolio KPIs (list cost, NEC, savings vs list cost, waste); spend-by-cloud stacked bar; executive health summary — three traffic-light signals (red/orange/green) for commitment waste %, tagging gap %, and top cost centre; navigation guidance pointing to detail pages.
+
+**Detail pages:**
+1. Overview — 5 KPI tiles (list cost, NEC, savings vs list cost, waste, waste %); daily NEC trend with z-score anomaly markers and legend; NEC by service category (donut); savings by pricing model (on_demand / RI / SP grouped bar); top commitment waste contributors (horizontal bar); cloud summary table; 3 insight callouts each with observation + **Recommendation** line (cloud dominance → commitment strategy; tagging gap → tag policy enforcement; top team → cost review)
 2. Team Allocation — NEC by team bar chart; NEC vs list cost grouped bar by team and cloud; RI/SP commitment utilization % with 100% target line; idle commitment waste detail table
-3. Tagging Coverage — tagged % by cloud / service / account; top untagged accounts with owner-missing flag; top services driving the tagging gap with % labels
-4. Shared Costs — proportional / even / weighted distribution with inline strategy explanations; weighted = fixed weights from `config/shared_cost_weights.yml`
-5. Untagged Resources — Untagged NEC trend over time; service breakdown with % of untagged NEC; account table with Priority (High/Medium/Low) and owner-missing flag
+3. Tagging Coverage — tagged % by cloud / service / account; enforcement alert with recommendation when untagged NEC ≥ 10%; top untagged accounts with owner-missing flag and recommendation; top services driving attribution gap with % of untagged NEC labels and recommendation
+4. Shared Costs — proportional / even / weighted distribution; weighted shares are explicitly defined: Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10% (sourced from `config/shared_cost_weights.yml`); per-strategy recommendation (proportional for prod, even for small teams, review weighted quarterly)
+5. Untagged Resources — Untagged NEC trend over time with recommendation to block untagged deployments via CI/CD; service breakdown with % of untagged NEC; account table with Priority (High = >15% of untagged NEC AND ≥30% own-NEC untagged; Medium = 5–15%; Low = <5%) and owner-missing flag; per-section recommendations
 
 ---
 
@@ -362,7 +364,7 @@ Three strategies, configurable per service:
 |---|---|---|
 | `proportional` | Default — fair based on usage | `team_share = team_direct_spend / total_direct_spend` |
 | `even` | Small teams, equal footing | `team_share = 1 / num_teams` |
-| `weighted` | Contractual SLAs differ | `team_share = team_weight / sum(all_weights)` |
+| `weighted` | Headcount or contractual SLA differences — weights defined in `config/shared_cost_weights.yml`: Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10% | `team_share = team_weight / sum(all_weights)` |
 
 **Shared cost candidates:** VPC networking, CloudTrail/logging, Security Hub, shared databases, monitoring tools.
 

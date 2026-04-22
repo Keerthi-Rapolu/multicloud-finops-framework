@@ -45,19 +45,28 @@ with col_ctrl1:
         help=(
             "**proportional** — teams that spend more absorb more shared cost\n\n"
             "**even** — equal split regardless of size\n\n"
-            "**weighted** — fixed % shares defined per team in `config/shared_cost_weights.yml`; "
-            "useful when cost ownership is governed by contract or headcount rather than usage"
+            "**weighted** — fixed % shares by business unit, defined in `config/shared_cost_weights.yml`: "
+            "Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%. "
+            "Use this when cost ownership is governed by headcount, SLA contract, or negotiated budget."
         ),
     )
 
 with col_ctrl1:
     strategy_notes = {
-        "proportional": "Each team's share scales with its total NEC — bigger spenders absorb more.",
-        "even":         "Shared cost split equally across all teams regardless of size.",
-        "weighted":     "Shares are fixed in `config/shared_cost_weights.yml` (e.g. by headcount or contract). "
-                        "Edit that file to adjust per-team weights.",
+        "proportional": "Each team's share scales with its total NEC — bigger spenders absorb more shared infrastructure cost.",
+        "even":         "Shared cost is split equally across all teams regardless of size or consumption.",
+        "weighted":     "Shares are fixed by business unit weight in `config/shared_cost_weights.yml` "
+                        "(Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%). "
+                        "Appropriate when cost ownership is governed by headcount or negotiated SLA.",
     }
     st.caption(f":bulb: {strategy_notes[strategy]}")
+
+_STRATEGY_RECS = {
+    "proportional": "**Recommendation:** Adopt proportional allocation for production environments — it creates natural cost accountability by tying shared-infra charges to each team's actual consumption.",
+    "even":         "**Recommendation:** Even split is appropriate for small, similarly-sized teams. If team size diverges, switch to proportional to avoid over-charging smaller teams.",
+    "weighted":     "**Recommendation:** Review `config/shared_cost_weights.yml` quarterly to keep weights aligned with actual headcount and budget agreements.",
+}
+st.info(_STRATEGY_RECS[strategy])
 
 # ---------------------------------------------------------------------------
 # Run distribution
