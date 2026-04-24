@@ -9,7 +9,7 @@ These TypedDicts are the agreed interface between modules:
 All three modules must produce / consume exactly these shapes.
 """
 
-from typing import TypedDict, Literal
+from typing import TypedDict, Literal, NotRequired
 
 
 # ---------------------------------------------------------------------------
@@ -102,3 +102,7 @@ class Recommendation(TypedDict):
     effort:             EffortLevel    # "Low" = 1-click, "Medium" = needs approval, "High" = migration
     time_to_realize:    TimeToRealize  # when savings start appearing in billing
     roi_score:          float          # annual savings / effort_hours — higher = better bang per effort
+    cloud_provider:     NotRequired[str]        # passthrough for drill-down filters
+    waste_type:         NotRequired[WasteType]  # maps recommendation back to source finding
+    billing_month:      NotRequired[str]        # source billing period
+    confidence:         NotRequired[float]      # source finding confidence for UI explanations

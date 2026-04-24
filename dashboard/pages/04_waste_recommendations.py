@@ -111,10 +111,17 @@ filtered_findings = [
     and f["cloud_provider"] in sel_clouds
 ] if findings else []
 
+scope_df = df[
+    df["allocated_team"].isin(sel_teams)
+    & df["cloud_provider"].isin(sel_clouds)
+].copy()
+
 filtered_recs = [
     r for r in recs
-    if r["allocated_team"] in sel_teams
-    and r["risk"]           in sel_risks
+    if r["allocated_team"]      in sel_teams
+    and r.get("cloud_provider") in sel_clouds
+    and r.get("waste_type")     in sel_types
+    and r["risk"]               in sel_risks
 ] if recs else []
 
 # ---------------------------------------------------------------------------
@@ -125,8 +132,8 @@ total_waste_detected = sum(
     f["nec_waste"] if f["nec_waste"] > 0 else f["nec_used"] for f in filtered_findings
 ) if filtered_findings else 0.0
 
-total_nec_used = df["nec_used"].sum()
-waste_pct      = total_waste_detected / total_nec_used * 100 if total_nec_used else 0
+total_nec = scope_df["nec"].sum()
+waste_pct = total_waste_detected / total_nec * 100 if total_nec else 0
 total_savings  = sum(r["estimated_savings"] for r in filtered_recs)
 n_quick_wins   = sum(1 for r in filtered_recs if r["risk"] == "Low")
 
@@ -138,7 +145,7 @@ ck3.metric("Recommendations",     str(len(filtered_recs)))
 ck4.metric("Low-Risk Quick Wins", str(n_quick_wins))
 
 # Enterprise scale projection — makes small numbers meaningful
-if total_nec_used > 0 and waste_pct > 0:
+if total_nec > 0 and waste_pct > 0:
     enterprise_monthly  = 10_000_000
     enterprise_savings  = enterprise_monthly * (waste_pct / 100) * 0.85
     st.info(
@@ -226,7 +233,7 @@ with col_actions:
 # ---------------------------------------------------------------------------
 st.markdown("---")
 
-cloud_nec = df.groupby("cloud_provider")["nec"].sum().rename("nec")
+cloud_nec = scope_df.groupby("cloud_provider")["nec"].sum().rename("nec")
 cloud_waste_map = fdf.groupby("cloud_provider")["cost_impact"].sum().rename("waste")
 cross = pd.concat([cloud_nec, cloud_waste_map], axis=1).fillna(0).reset_index()
 cross["waste_pct"] = (cross["waste"] / cross["nec"].replace(0, float("nan")) * 100).fillna(0).round(1)
@@ -557,8 +564,8 @@ else:
     st.subheader("Step 5 — Projected impact if actions applied")
 
     low_savings        = sum(r["estimated_savings"] for r in filtered_recs if r["risk"] == "Low")
-    savings_pct_of_nec = total_savings / total_nec_used * 100 if total_nec_used else 0
-    low_pct_of_nec     = low_savings / total_nec_used * 100 if total_nec_used else 0
+    savings_pct_of_nec = total_savings / total_nec * 100 if total_nec else 0
+    low_pct_of_nec     = low_savings / total_nec * 100 if total_nec else 0
     high_count         = sum(1 for r in filtered_recs if r["risk"] == "High")
 
     col_low, col_all = st.columns(2)
@@ -622,8 +629,8 @@ else:
     st.subheader("Before vs After — if all actions applied")
 
     waste_after     = max(0, total_waste_detected - total_savings)
-    waste_pct_after = waste_after / total_nec_used * 100 if total_nec_used else 0
-    nec_after       = total_nec_used - total_savings
+    waste_pct_after = waste_after / total_nec * 100 if total_nec else 0
+    nec_after       = max(0, total_nec - total_savings)
     waste_improvement_pct = (
         (total_waste_detected - waste_after) / total_waste_detected * 100
         if total_waste_detected > 0 else 0
@@ -634,7 +641,7 @@ else:
     col_b, col_a = st.columns(2)
     with col_b:
         st.markdown("**Current state**")
-        st.markdown(f"- NEC: **${total_nec_used:,.0f}/month**")
+        st.markdown(f"- NEC: **${total_nec:,.0f}/month**")
         st.markdown(f"- Waste: **${total_waste_detected:,.0f}** ({waste_pct:.1f}% of NEC)")
         st.markdown(f"- Recoverable: **${total_savings:,.0f}/month**")
         st.markdown(f"- Quick wins available: **{n_quick_wins}** low-risk actions")
@@ -650,9 +657,9 @@ else:
     import plotly.graph_objects as go
     ba_fig = go.Figure(data=[
         go.Bar(name="Before", x=["NEC", "Waste"],
-               y=[total_nec_used, total_waste_detected],
+               y=[total_nec, total_waste_detected],
                marker_color=[COLOR_INEFFICIENCY, COLOR_BLOCKER],
-               text=[f"${total_nec_used:,.0f}", f"${total_waste_detected:,.0f}"],
+               text=[f"${total_nec:,.0f}", f"${total_waste_detected:,.0f}"],
                textposition="outside"),
         go.Bar(name="After",  x=["NEC", "Waste"],
                y=[nec_after, waste_after],
@@ -668,7 +675,7 @@ else:
     st.plotly_chart(ba_fig, use_container_width=True)
 
     # Enhanced summary strip — monthly, annual, % of NEC avoided (Task #7)
-    _nec_pct_avoided = total_savings / total_nec_used * 100 if total_nec_used else 0
+    _nec_pct_avoided = total_savings / total_nec * 100 if total_nec else 0
     col_s1, col_s2, col_s3, col_s4 = st.columns(4)
     col_s1.metric("Monthly avoidance",  f"${total_savings:,.0f}")
     col_s2.metric("Annualised",         f"${annual_savings:,.0f}")

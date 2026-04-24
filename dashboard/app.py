@@ -27,7 +27,70 @@ from dashboard._shared import (
     render_priority_badge,
 )
 
-_DB = Path(__file__).resolve().parents[1] / "finops_dbt.duckdb"
+_DB   = Path(__file__).resolve().parents[1] / "finops_dbt.duckdb"
+_REPO = _DB.parent
+
+
+def _bootstrap_db() -> None:
+    """Build the DuckDB mart from committed synthetic CSVs on first run.
+
+    Runs automatically on Streamlit Community Cloud where the generated
+    database file is absent (*.duckdb is gitignored; only CSVs are committed).
+    """
+    import re
+    import subprocess
+
+    sys.path.insert(0, str(_REPO))
+    from load_synthetic import run as _ls_run
+    from scripts.config import GeneratorConfig
+
+    # dbt_project/profiles.yml is gitignored — regenerate it if absent
+    profiles_path = _REPO / "dbt_project" / "profiles.yml"
+    if not profiles_path.exists():
+        profiles_path.write_text(
+            "multicloud_finops:\n"
+            "  target: dev\n"
+            "  outputs:\n"
+            "    dev:\n"
+            "      type: duckdb\n"
+            "      path: \"../finops_dbt.duckdb\"\n"
+            "      threads: 4\n",
+            encoding="utf-8",
+        )
+
+    syn_aws = _REPO / "data" / "synthetic" / "aws"
+    months = sorted(
+        m.group(1)
+        for f in sorted(syn_aws.glob("aws_cur_*.csv"))
+        if (m := re.search(r"(\d{4}-\d{2})", f.name))
+    )
+    if not months:
+        st.error(
+            "**Auto-bootstrap failed** — no synthetic CSVs found in "
+            "`data/synthetic/aws/`. Commit them or run `make pipeline` locally."
+        )
+        st.stop()
+
+    with st.status("⚙️ First-run setup — building database from synthetic data…", expanded=True) as _status:
+        for month in months:
+            st.write(f"Loading {month}…")
+            _ls_run(billing_month=month, force=True, cfg=GeneratorConfig())
+
+        st.write("Running dbt transformations…")
+        result = subprocess.run(
+            ["dbt", "run", "--full-refresh"],
+            cwd=str(_REPO / "dbt_project"),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            st.error("**dbt failed** — see output below.")
+            st.code(result.stdout + "\n" + result.stderr)
+            st.stop()
+
+        _status.update(label="✅ Database ready — loading dashboard…", state="complete")
+
+    st.rerun()
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -46,6 +109,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Auto-bootstrap: if DuckDB is absent (e.g. fresh Streamlit Cloud deploy),
+# build it from the synthetic CSVs that are committed to the repo.
+if not _DB.exists():
+    _bootstrap_db()
 
 
 @st.cache_data(show_spinner="Loading billing data…")

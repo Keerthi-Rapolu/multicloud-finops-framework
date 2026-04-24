@@ -114,6 +114,15 @@ filtered = [
     and (not show_anomaly_only or ins["anomaly"])
 ]
 
+filtered_teams = {
+    ins["scope"].replace("team:", "")
+    for ins in filtered
+}
+filtered_recs = [
+    r for r in recs
+    if r["allocated_team"] in filtered_teams
+] if recs else []
+
 # Pre-compute per-team waste totals from findings
 _team_waste: dict[str, float] = {}
 for f in findings:
@@ -123,7 +132,7 @@ for f in findings:
 
 # Per-team recommendation savings
 _team_savings: dict[str, float] = {}
-for r in recs:
+for r in filtered_recs:
     team = r["allocated_team"]
     _team_savings[team] = _team_savings.get(team, 0.0) + r["estimated_savings"]
 
@@ -134,7 +143,7 @@ for r in recs:
 n_teams     = len(filtered)
 n_anomalies = sum(1 for ins in filtered if ins["anomaly"])
 avg_change  = sum(ins["cost_change_pct"] for ins in filtered) / n_teams if n_teams else 0.0
-total_savings = sum(r["estimated_savings"] for r in recs)
+total_savings = sum(r["estimated_savings"] for r in filtered_recs)
 total_nec   = df["nec"].sum()
 waste_total = df["nec_waste"].sum()
 waste_pct   = waste_total / total_nec * 100 if total_nec else 0
@@ -260,8 +269,8 @@ untagged_pct = untagged_nec / total_nec * 100 if total_nec else 0
 # Top opportunity
 top_rec_action = "—"
 top_rec_savings = 0.0
-if recs:
-    top_rec = recs[0]
+if filtered_recs:
+    top_rec = filtered_recs[0]
     top_rec_action  = top_rec["action"].replace("_", " ").title()
     top_rec_savings = top_rec["estimated_savings"]
 
@@ -285,7 +294,7 @@ if top_rec_savings > 0:
 
 # Rank recommended actions
 action_savings: dict[str, float] = {}
-for r in recs:
+for r in filtered_recs:
     action_savings[r["action"]] = action_savings.get(r["action"], 0.0) + r["estimated_savings"]
 ranked_actions = sorted(action_savings.items(), key=lambda x: x[1], reverse=True)[:3]
 
@@ -308,13 +317,13 @@ st.subheader("What should I do this week?")
 st.caption("Top 3 highest-ROI actions, ordered by: savings × low-risk × immediate impact.")
 
 _weekly_recs = sorted(
-    [r for r in recs if r["risk"] in ("Low", "Medium")],
+    [r for r in filtered_recs if r["risk"] in ("Low", "Medium")],
     key=lambda r: (r.get("roi_score", 0), r["estimated_savings"]),
     reverse=True,
 )[:3]
 
 if not _weekly_recs:
-    _weekly_recs = sorted(recs, key=lambda r: r["estimated_savings"], reverse=True)[:3]
+    _weekly_recs = sorted(filtered_recs, key=lambda r: r["estimated_savings"], reverse=True)[:3]
 
 if _weekly_recs:
     for i, rec in enumerate(_weekly_recs, 1):

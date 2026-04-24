@@ -210,6 +210,10 @@ def run(waste_findings: list[dict]) -> list[Recommendation]:
             effort=effort,
             time_to_realize=time_to_realize,
             roi_score=roi_score,
+            cloud_provider=f["cloud_provider"],
+            waste_type=f["waste_type"],
+            billing_month=f["billing_month"],
+            confidence=round(f["confidence"], 4),
         ))
 
     return sorted(recs, key=lambda r: r["priority_score"], reverse=True)
