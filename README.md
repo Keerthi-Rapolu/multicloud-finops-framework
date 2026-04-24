@@ -1,6 +1,6 @@
-# AI-Ready Multi-Cloud FinOps Cost Attribution & Allocation Framework
+# Multi-Cloud FinOps Cost Intelligence Framework
 
-> **An open-source, data-engineering-native framework for normalizing, allocating, and visualizing cloud costs across AWS, Azure, and GCP — with zero paid tooling.**
+> **An open-source, data-engineering-native framework that normalizes, allocates, and intelligently analyzes cloud costs across AWS, Azure, and GCP — moving FinOps from reactive reporting to proactive, evidence-backed optimization. Zero paid tooling required.**
 
 **Authors:** Keerthi Rapolu · Rishika Naha &nbsp;|&nbsp; April 2026
 
@@ -16,9 +16,10 @@ Modern enterprises run workloads across multiple cloud providers simultaneously.
 | **Untagged resources** | 30–50% of cloud resources lack cost allocation tags in real deployments |
 | **RI/SP amortization** | `unblended_cost` shows `$0` for RI-covered hours — resources look free, distorting accountability |
 | **Shared infrastructure** | Networking, logging, and security costs have no direct owner and inflate team budgets arbitrarily |
+| **No prescriptive intelligence** | Existing tools report what was spent but cannot explain *why* costs changed, identify waste with ownership, or quantify the financial impact of fixing it |
 | **No open-source standard** | Existing tools (CloudHealth, Apptio) are closed-source and expensive |
 
-This framework addresses these gaps with a reproducible, SQL-first pipeline that runs entirely on your laptop or GitHub Actions free tier.
+This framework addresses all six gaps with a reproducible, SQL-first pipeline backed by a deterministic intelligence layer — runs entirely on your laptop or GitHub Actions free tier.
 
 ---
 
@@ -63,9 +64,15 @@ flowchart TD
         A1["shared_cost.py  ·  nec_model.py  ·  untagged_heuristic.py\nShared cost distribution  ·  NEC aggregation  ·  Untagged attribution"]
     end
 
-    ALC --> DSH
+    ALC --> INT
 
-    subgraph DSH["📊  LAYER 6 · DASHBOARD"]
+    subgraph INT["🧠  LAYER 6 · COST INTELLIGENCE ENGINE"]
+        IN1["waste_detector.py  ·  causal_engine.py  ·  impact_simulator.py\nWaste Detection  ·  Root Cause Reasoning  ·  Impact Simulation\nConfidence scoring  ·  Savings estimation  ·  Risk classification"]
+    end
+
+    INT --> DSH
+
+    subgraph DSH["📊  LAYER 7 · DASHBOARD"]
         D1["Streamlit + Plotly\nOverview · Cost Allocation · Tagging & Attribution\nWaste & Recommendations · Cost Intelligence"]
     end
 
@@ -75,6 +82,7 @@ flowchart TD
     classDef slvNode fill:#1e2535,stroke:#94a3b8,color:#e2e8f0
     classDef gldNode fill:#3d3200,stroke:#ffd700,color:#fffde0
     classDef alcNode fill:#2d1a4a,stroke:#a855f7,color:#f0e8ff
+    classDef intNode fill:#1a0a2e,stroke:#ec4899,color:#fce7f3
     classDef dshNode fill:#0a2a35,stroke:#06b6d4,color:#e0f7ff
 
     style SRC fill:#0f1f35,stroke:#4a9eff,color:#b0d4ff
@@ -83,6 +91,7 @@ flowchart TD
     style SLV fill:#131c2e,stroke:#94a3b8,color:#c8d8e8
     style GLD fill:#2a2200,stroke:#ffd700,color:#ffe680
     style ALC fill:#1e1030,stroke:#a855f7,color:#d4b0f5
+    style INT fill:#0f0520,stroke:#ec4899,color:#fbb6ce
     style DSH fill:#051a22,stroke:#06b6d4,color:#90e0ef
 
     class AWS,AZURE,GCP srcNode
@@ -91,6 +100,7 @@ flowchart TD
     class S1 slvNode
     class G1 gldNode
     class A1 alcNode
+    class IN1 intNode
     class D1 dshNode
 ```
 
@@ -128,37 +138,40 @@ make pipeline MONTH=2026-04 SCENARIO=untagged-heavy
 
 ### Net Effective Cost (NEC)
 
-`unblended_cost` is the wrong metric for RI/SP chargeback:
+`unblended_cost` is the wrong metric for RI/SP chargeback. It systematically misrepresents cost for commitment-covered resources:
 
-- **RI-covered hours** → `unblended_cost = $0.00` — the instance looks free
-- **SP-covered hours** → `unblended_cost = on-demand rate` — the discount is invisible
+- **RI-covered hours** → `unblended_cost = $0.00` — the instance appears free, making teams with RI coverage look artificially efficient
+- **SP-covered hours** → `unblended_cost = on-demand rate` — the discount is invisible, overstating team cost
 
-NEC corrects this per cloud:
+NEC corrects this per cloud by reading from the commitment-specific cost fields that reflect actual amortized spend:
 
-| Cloud | Formula |
-|---|---|
-| **AWS** `DiscountedUsage` | `nec = reservation_effective_cost` |
-| **AWS** `SavingsPlanCoveredUsage` | `nec = savings_plan_effective_cost` |
-| **AWS** `RIFee` | `nec_used = 0`, `nec_waste = unused_upfront + unused_recurring` |
-| **Azure** `Usage` | `nec = billed_cost` (amortized export — RI/SP spread daily) |
-| **Azure** `UnusedReservation/SP` | `nec_waste = billed_cost` |
-| **GCP** | `nec = GREATEST(list_cost + Σ credits, 0)` |
+| Cloud | Line Item Type | NEC Formula |
+|---|---|---|
+| **AWS** `DiscountedUsage` | RI-covered compute | `nec = reservation/EffectiveCost` |
+| **AWS** `SavingsPlanCoveredUsage` | SP-covered compute | `nec = savingsPlan/SavingsPlanEffectiveCost` |
+| **AWS** `RIFee` | Monthly RI commitment row | `nec_used = 0`; `nec_waste = unused_upfront + unused_recurring` |
+| **AWS** `SavingsPlanRecurringFee` | Monthly SP commitment row | `nec_waste = recurring_commitment − used_commitment` |
+| **Azure** `Usage` | Amortized export row | `nec = CostInBillingCurrency` (RI/SP spread daily across covered resources) |
+| **Azure** `UnusedReservation / UnusedSavingsPlan` | Idle commitment row | `nec_waste = CostInBillingCurrency` |
+| **GCP** Detailed Export | All service rows | `nec = GREATEST(cost + Σ credit.amount, 0)` |
+
+The `nec_used` / `nec_waste` split is preserved through the Gold layer, enabling both accurate chargeback and waste attribution at team granularity.
 
 ### Shared Cost Distribution
 
-Shared infrastructure (VPC networking, logging, Security Hub, monitoring) is distributed across teams using one of three configurable strategies:
+Shared infrastructure (VPC networking, CloudTrail, Security Hub, centralized monitoring) has no direct resource owner and must be distributed across teams. Three configurable strategies are supported, set per-service in [`config/shared_cost_weights.yml`](config/shared_cost_weights.yml):
 
 | Strategy | Formula | When to use |
 |---|---|---|
-| `proportional` | `team_share = team_direct_nec / total_direct_nec` | Default — fair, usage-weighted |
-| `even` | `team_share = 1 / N` | Equal split for small teams |
-| `weighted` | `team_share = team_weight / Σ weights` | Contractual SLA differences |
+| `proportional` | `share = team_direct_nec / Σ all_direct_nec` | Default — allocation tracks actual usage weight |
+| `even` | `share = 1 / N` | Small teams where usage-proportional splits create noise |
+| `weighted` | `share = team_weight / Σ weights` | Headcount or contractual SLA differences; weights defined in config |
 
-Strategy is configured per-service in [`config/shared_cost_weights.yml`](config/shared_cost_weights.yml).
+Default business-unit weights: Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%.
 
 ### Unified Cost Allocation Schema (CAS)
 
-Every cloud's billing data is normalized to a 31-column schema:
+All three clouds normalize to a single 31-column schema in `fct_unified_billing`. Every row, regardless of origin, exposes the same fields for downstream analysis:
 
 ```
 Identity      cloud_provider · billing_account_id · billing_month · account_id · account_name
@@ -171,6 +184,48 @@ Tags          tag_team · tag_environment · tag_cost_center · is_tagged
 Allocation    allocated_team · allocated_nec · is_shared_cost · is_commitment_waste
 Category      service_category  (Compute | Storage | Database | Analytics | Platform | Other)
 ```
+
+The `is_commitment_waste` and `is_shared_cost` boolean flags allow downstream consumers to slice waste, shared cost, and attributed spend without any additional joins.
+
+### Cost Intelligence Layer
+
+The intelligence layer sits downstream of the allocation engine and transforms billing data from descriptive reporting into prescriptive analysis. It comprises three engines that operate in a sequential pipeline:
+
+#### 1. Waste Detection Engine
+
+Classifies every resource across four waste categories using configurable thresholds from [`config/waste_thresholds.yml`](config/waste_thresholds.yml):
+
+| Waste Type | Detection Logic | Typical Cause |
+|---|---|---|
+| `unused_commitment` | `is_commitment_waste = true` with `nec_waste > threshold` | RI or SP purchased beyond actual usage |
+| `idle_compute` | Compute rows with `nec_used / vcpu` below idle floor | Over-provisioned EC2 / VM left running without load |
+| `zombie_resource` | `0 < nec_used < monthly_floor` for the full billing period | Forgotten resource — decommissioned but not deleted |
+| `underutilized_commitment` | RI/SP rows where `used / total_commitment < utilization_threshold` | Commitment purchased for a workload that was later downsized |
+
+Each `WasteFinding` carries an `estimated_waste` dollar amount, a `confidence` score (0–1), and the `allocated_team` owner from the attribution layer — making waste directly actionable at the team level.
+
+#### 2. Causal Reasoning Engine
+
+Explains *why* a team's cost looks the way it does by deriving structured facts from billing patterns and assembling them into ranked root cause chains. For each team it produces a `CausalInsight` containing:
+
+- **Root causes** — ordered list of `RootCause` objects, each with a `fact_type`, human-readable description, and `confidence` score
+- **MoM trend signal** — direction and magnitude of month-over-month NEC change (requires ≥ 2 months of data)
+- **Anomaly flag** — z-score deviation from the rolling billing baseline; a score ≥ 2.0 triggers an anomaly explanation
+
+Fact types the engine reasons over: `commitment_waste_identified`, `idle_resources_detected`, `untagged_cost_gap`, `service_category_dominance`, `team_cost_spike`, `team_cost_decrease`. When only one billing month is available the engine produces fact-only insights; loading multiple months (December 2025 – April 2026 synthetic data ships in the repo) activates full trend and anomaly reasoning.
+
+#### 3. Impact Simulation Engine
+
+Converts `WasteFinding` objects into prioritised `Recommendation` dicts by estimating recoverable savings using conservative, evidence-backed recovery rates:
+
+| Action | Recovery Rate | Risk Level |
+|---|---|---|
+| `release_commitment` (unused) | 100% of `nec_waste` | Low |
+| `resize_down` (idle compute) | 60% of waste signal | Low |
+| `remove_resource` (zombie) | 90% of `nec_used` | Medium |
+| `release_commitment` (underutilized) | 50% of waste signal | Medium |
+
+Recommendations are ranked by `priority_score = estimated_savings × (1 − risk_weight)`, surfacing the highest ROI, lowest risk actions first. The dashboard renders a full before/after scenario comparison showing projected spend reduction if all recommendations are applied.
 
 ---
 
@@ -279,6 +334,7 @@ multicloud-finops-framework/
 |---|---|---|
 | Data transform | **dbt Core + DuckDB** | SQL-first, version-controlled, runs entirely in-process — no infrastructure |
 | Processing | **Python 3.11 + pandas + PyArrow** | Parquet I/O, schema validation, allocation engine |
+| Intelligence | **Python + PyYAML + NumPy** | Deterministic waste detection, causal reasoning, and impact simulation — no LLM required |
 | Dashboard | **Streamlit + Plotly** | Python-native, free tier deploy on Streamlit Cloud |
 | Orchestration | **GitHub Actions** | Free 2,000 min/month — CI + weekly pipeline |
 | ML (optional) | **scikit-learn** | `RandomForestClassifier` for untagged resource attribution |
@@ -411,22 +467,29 @@ This version is a **local, synthetic-data reference implementation**. It is desi
 
 This framework accompanies a research paper submitted to arXiv / IEEE CLOUD:
 
-> **A Scalable Framework for Multi-Cloud Cost Allocation Using Data Engineering Principles**
+> **A Multi-Cloud Cost Intelligence Framework: Attribution, Waste Detection, Causal Reasoning, and Impact Simulation**
 > Keerthi Rapolu, Rishika Naha — 2026
 
 Key contributions documented in the paper:
-- A 31-column Unified Cost Allocation Schema (CAS) with full field mappings for AWS CUR, Azure Cost Management, and GCP Billing Export
-- Per-cloud NEC amortization formulas with validation against AWS Cost Explorer reference values
-- Three shared-cost distribution strategies with empirical comparison on synthetic data
-- A two-stage untagged resource attribution engine (heuristic rules + optional ML classifier)
+
+**Phase 1 — Cost Allocation Framework**
+- A 31-column Unified Cost Allocation Schema (CAS) with complete field mappings for AWS CUR, Azure Cost Management Export, and GCP Billing Detailed Export
+- Per-cloud Net Effective Cost (NEC) amortization formulas covering RI, Savings Plans, and CUDs — with validation against AWS Cost Explorer reference values
+- Three configurable shared-cost distribution strategies (proportional, even, weighted) with empirical comparison on synthetic data
+- A two-stage untagged resource attribution engine: deterministic heuristic rules backed by an optional `RandomForestClassifier` for higher-coverage environments
+
+**Phase 2 — Cost Intelligence Layer**
+- A taxonomy-driven waste detection engine that classifies billing-side inefficiencies into four categories (`unused_commitment`, `idle_compute`, `zombie_resource`, `underutilized_commitment`) with per-finding confidence scores and team ownership attribution
+- A causal reasoning engine that derives structured facts from billing patterns and constructs ranked root-cause chains per team, with MoM trend analysis and statistical anomaly detection (z-score ≥ 2.0)
+- An impact simulation engine that converts waste findings into prioritised recommendations using conservative, evidence-backed recovery rates and a risk-adjusted priority scoring model
 
 ---
 
 ## CI
 
 On every push to `main` or `dev`, GitHub Actions runs:
-1. `pytest tests/ -v` — unit tests for NEC model, shared cost, normalization, untagged attribution
-2. `python load_synthetic.py --month 2026-03 --force` — smoke test: generate and validate all three clouds
+1. `pytest tests/ -v` — full test suite covering NEC model, shared cost, normalization, untagged attribution, waste detection, causal reasoning, and impact simulation
+2. `python load_synthetic.py --month 2026-03 --force` — smoke test: generate and validate all three cloud schemas
 3. `dbt run` — materialize all Bronze / Silver / Gold models
 4. `dbt test` — run dbt schema tests against the mart
 

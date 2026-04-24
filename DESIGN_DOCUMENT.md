@@ -1,5 +1,5 @@
 # Multi-Cloud FinOps Cost Intelligence System
-## Design Document v2.0
+## Design Document v2.1
 
 **Project:** Research Paper + GitHub Demo  
 **Authors:** Keerthi Rapolu + Rishika Naha  
@@ -12,154 +12,168 @@
 
 ### Overview
 
-This project originally focuses on multi-cloud cost ingestion, normalization, and attribution across AWS, Azure, and GCP.
+The project began as a multi-cloud cost ingestion, normalization, and attribution framework covering AWS, Azure, and GCP. Phase 1 establishes the financial accuracy and ownership layer; Phase 2 builds an intelligence layer on top that moves the system from *descriptive* (what was spent and by whom) to *prescriptive* (where is waste, why did cost change, and what should be done about it).
 
-The next phase evolves it into a **Causal Cost Intelligence System** that detects inefficiencies, explains cost behavior, and quantifies optimization impact.
+Both phases are fully implemented.
 
 ---
 
-### Existing Capabilities (Phase 1 — Already Implemented)
+### Phase 1 — Cost Allocation Framework ✅ Complete
 
-The current system provides a strong data engineering and FinOps foundation.
+#### Multi-Cloud Ingestion and Normalization
 
-#### Multi-Cloud Cost Ingestion & Normalization
-- Ingests billing data from AWS, Azure, GCP
-- Standardizes schema across providers
-- Handles pricing model differences (On-Demand, RI, Savings Plans)
+Billing exports from all three hyper-scalers are ingested via Python validators and landed as Parquet, then normalized through dbt into a cloud-agnostic schema. Each cloud's proprietary column structure (48 AWS CUR columns, 32 Azure Cost Management columns, 27 GCP Billing Export columns) is mapped to the 31-column Unified Cost Allocation Schema (CAS).
 
-**Purpose:** Create a unified cost dataset for downstream processing.
+Pricing model differences — on-demand, Reserved Instances, Savings Plans, Committed Use Discounts — are handled explicitly rather than treated as pass-through. The staging and intermediate dbt layers resolve each cloud's discount representation so downstream consumers work with a consistent `nec_used` / `nec_waste` split regardless of provider.
 
-#### NEC (Normalized Effective Cost) Layer
-- Computes `nec_used` → actual usage cost, `nec_waste` → unused commitment cost
-- Eliminates billing distortions (RI/SP masking)
+#### Net Effective Cost (NEC) Layer
 
-**Purpose:** Ensure financial correctness; enable accurate cost comparison and analysis.
+`unblended_cost` and raw billing cost systematically misrepresent spend for commitment-covered resources: RI-covered hours appear at `$0`, SP-covered hours appear at full on-demand rate. NEC corrects both distortions by reading from commitment-specific cost fields.
 
-#### Cost Attribution Layer (Rishika's Contribution)
-- **Tag-Based Allocation** — maps resources to teams/services using tags
-- **Untagged Heuristics** — assigns ownership when tags are missing using rule-based logic
+The model emits two orthogonal signals per row:
+- `nec_used` — cost attributable to actual consumed usage after commitment discount amortization
+- `nec_waste` — cost of idle commitment capacity (unused RI hours, SP recurring fee shortfall)
 
-**Output:** `resource_id → team/service → confidence_score`
+These signals propagate through the Gold layer and drive both accurate team chargeback and waste identification downstream.
 
-**Purpose:** Answer "Who owns this cost?"
+#### Cost Attribution Layer *(Rishika Naha)*
+
+Resolves resource ownership for every billing row using a two-stage pipeline:
+1. **Tag-based direct allocation** — resources with a `team` tag are attributed deterministically
+2. **Untagged heuristic attribution** — resources without a tag are matched against configurable rule patterns (`config/heuristic_rules.yml`) based on resource name, account, and service; an optional `RandomForestClassifier` (`allocation/untagged_ml.py`) provides probabilistic attribution when tagging coverage is sufficient
+
+**Output:** `resource_id → allocated_team → confidence_score`
 
 #### Unified Cost Data Model
-Centralized cost mart supporting reporting and dashboards.
+
+All three clouds' data converges in `fct_unified_billing` — a single DuckDB mart that serves every downstream consumer: the allocation engine, the intelligence layer, and the dashboard. Shared-cost distribution (proportional / even / weighted) is applied in the Azure intermediate layer and propagates through the Gold UNION ALL.
 
 ---
 
-### Limitations of Phase 1
+### Phase 1 Limitations — Addressed by Phase 2
 
 | Gap | Description |
 |---|---|
-| No Waste Identification | Cannot identify idle or inefficient resources |
-| No Root Cause Analysis | Detects cost but does not explain why it changed |
-| No Actionable Recommendations | No guidance on how to optimize cost |
-| No Impact Estimation | Cannot answer "If I fix this, how much will I save?" |
-| Descriptive Only | System is reporting-oriented, not analytical or prescriptive |
+| No waste identification | Cannot identify idle or inefficient resources by type |
+| No root cause analysis | Detects cost magnitude but cannot explain why it changed |
+| No actionable recommendations | No guidance on what to do or in what order |
+| No impact estimation | Cannot answer "If I act on this, how much will I recover?" |
+| Descriptive only | System is reporting-oriented; analysis requires manual investigation |
 
 ---
 
-### Phase 2 Enhancement: Cost Intelligence Layer
+### Phase 2 — Cost Intelligence Layer ✅ Complete
 
-To address these gaps, a new **Cost Intelligence Layer** is introduced — Keerthi's contribution.
+To address these gaps, a **Cost Intelligence Layer** (`intelligence/`) was implemented as Keerthi Rapolu's Phase 2 contribution. It operates entirely on the normalized billing data — no external observability signals (CloudWatch, Azure Monitor) are required.
 
 #### Architecture
 
 ```
-Cost Data (Normalized + NEC)
-        ↓
-Attribution Layer (Rishika)
-        ↓
-Cost Intelligence Layer (Keerthi)
-    ├── Waste Detection Engine
-    ├── Causal Reasoning Engine
-    └── Impact Simulation Engine
+fct_unified_billing  (Gold mart — NEC + attribution)
+           ↓
+  ┌────────────────────────────────────────────┐
+  │         COST INTELLIGENCE LAYER            │
+  │                                            │
+  │  waste_detector.py                         │
+  │    → list[WasteFinding]                    │
+  │       (resource, team, type, confidence,   │
+  │        estimated_waste)                    │
+  │           ↓                                │
+  │  causal_engine.py                          │
+  │    → list[CausalInsight]                   │
+  │       (team, root_causes[], trend,         │
+  │        anomaly_flag, confidence)           │
+  │           ↓                                │
+  │  impact_simulator.py                       │
+  │    → list[Recommendation]                  │
+  │       (action, savings, risk,              │
+  │        priority_score, rationale)          │
+  └────────────────────────────────────────────┘
+           ↓
+     Dashboard Pages 04 + 05
 ```
 
-#### Waste Detection Engine
+#### Waste Detection Engine (`intelligence/waste_detector.py`)
 
-**Purpose:** Identify inefficiencies and avoidable cost.
+Scans the unified billing mart and classifies inefficiencies into a four-category waste taxonomy. Thresholds are read from `config/waste_thresholds.yml` at runtime — no code changes are required to tune sensitivity.
 
-Detects: idle resources, low utilization, zombie infrastructure, inefficient configurations, underutilized commitments.
+| Waste Type | Detection Signal | Example Finding |
+|---|---|---|
+| `unused_commitment` | `is_commitment_waste = true` with `nec_waste > floor` | RI running at 0% utilization for a billing period |
+| `idle_compute` | `nec_used / vcpu < idle_cost_per_vcpu_threshold` | EC2 instance consuming $0.003/vCPU-hr vs $0.05 baseline |
+| `zombie_resource` | `0 < total_nec_used < monthly_floor` over full period | Orphaned EBS snapshot costing $0.40/month |
+| `underutilized_commitment` | `used_commitment / total_commitment < utilization_threshold` | Savings Plan at 42% vs 70% configured threshold |
 
-```json
-{
-  "resource": "ec2-123",
-  "team": "payments",
-  "issue": "idle_compute",
-  "confidence": 0.91,
-  "estimated_waste": "$420/month"
-}
-```
+Each `WasteFinding` contains: `resource_id`, `allocated_team`, `cloud_provider`, `waste_type`, `estimated_waste`, `confidence` (0–1), and `service_category`. The confidence score is derived from signal strength — `unused_commitment` findings are deterministic (confidence = 1.0); idle compute findings carry lower confidence because vCPU-normalized cost is a billing-side proxy, not a direct utilization metric.
 
-Answers: What is waste? Where are inefficiencies? Which team is responsible?
+#### Causal Reasoning Engine (`intelligence/causal_engine.py`)
 
-#### Causal Reasoning Engine
+Derives structured *facts* from billing patterns and assembles them into ranked root cause chains — one `CausalInsight` per team. The engine operates in two modes depending on data availability:
 
-**Purpose:** Explain why cost behavior changed.
+**Single-month mode** — produces fact-based insights from the current billing period alone:
+- Commitment waste presence and magnitude
+- Idle resource count by type
+- Untagged NEC fraction (attribution gap)
+- Dominant service category and its NEC share
 
-Consumes structured facts (cost trends, usage patterns, attribution, deployment events) and generates root cause explanations with confidence scores.
+**Multi-month mode** (activated when ≥ 2 months of data are loaded) — adds temporal reasoning:
+- Month-over-month NEC change (direction + percentage)
+- Z-score anomaly detection: `z = (current_nec − rolling_mean) / rolling_std`; z ≥ 2.0 triggers an anomaly finding
+- Trend classification: `increasing` / `decreasing` / `stable`
 
-```
-Cost increased by 18% in last 3 days.
+The six fact types the engine reasons over are: `commitment_waste_identified`, `idle_resources_detected`, `untagged_cost_gap`, `service_category_dominance`, `team_cost_spike`, `team_cost_decrease`. Each `RootCause` object carries a `fact_type`, human-readable `description`, and a `confidence` score. Root causes are sorted by confidence descending before being surfaced in the dashboard.
 
-Cause:
-- Deployment reduced memory allocation
-- Retry count increased
-- Invocation duration increased
+#### Impact Simulation Engine (`intelligence/impact_simulator.py`)
 
-Confidence: 0.84
-```
+Converts `WasteFinding` objects into prioritised `Recommendation` dicts. Savings estimates use conservative, per-action-type recovery rates derived from industry benchmarks:
 
-Answers: Why did cost increase/decrease? What triggered the change? Is the change expected or anomalous?
+| Action Type | Recovery Rate | Risk Level | Risk Weight |
+|---|---|---|---|
+| `release_commitment` (fully unused) | 100% of `nec_waste` | Low | 0.1 |
+| `resize_down` (idle compute) | 60% of waste signal | Low | 0.2 |
+| `remove_resource` (zombie) | 90% of `nec_used` | Medium | 0.4 |
+| `release_commitment` (underutilized) | 50% of waste signal | Medium | 0.4 |
 
-#### Impact Simulation Engine
+Priority score formula: `priority_score = estimated_savings × (1 − risk_weight)`
 
-**Purpose:** Quantify financial impact of optimization actions.
-
-Simulates resource resizing, configuration changes, and waste removal. Estimates cost savings, risk level, and optimization priority.
-
-```
-Recommendation: Reduce EC2 instance size
-Estimated savings: $240/month (80% reduction)
-Risk: Low
-```
-
-Answers: What should I do? How much will I save? Which optimization is most valuable?
+This ranking ensures that high-savings, low-risk actions (e.g., releasing a fully unused RI) surface before high-savings, high-risk actions (e.g., removing a resource that might still be in use). The dashboard renders a before/after projected impact and a scenario comparison (apply all Low-risk vs. apply all actions).
 
 ---
 
 ### Key Innovation
 
-The innovation is **not** in individual components, but in their integration.
+The distinguishing contribution is not any individual engine but the **integrated pipeline** from raw billing data to prioritised, evidence-backed recommendations:
 
-| Traditional FinOps | This System |
-|---|---|
-| Cost visibility, tagging, basic alerts | Attribution → Detection → Explanation → Recommendation → Impact |
-
-Unique capabilities: combines cost attribution, waste detection, causal reasoning, and financial impact simulation to produce explainable insights, actionable recommendations, and quantified outcomes.
-
----
-
-### Phase 2 Role Separation
-
-| Contributor | Responsibility |
-|---|---|
-| Rishika Naha | Tag-based allocation, untagged heuristics, ownership mapping |
-| Keerthi Rapolu | Waste detection engine, causal reasoning engine, impact simulation engine |
+| Capability | Traditional FinOps Tools | This System |
+|---|---|---|
+| Cost visibility | ✅ | ✅ |
+| Tag-based allocation | ✅ | ✅ |
+| Shared cost distribution | Partial | ✅ (3 configurable strategies) |
+| Commitment waste identification | Basic flags | ✅ (4-type taxonomy + confidence) |
+| Root cause explanation | ❌ | ✅ (fact-based, evidence-ranked) |
+| Impact quantification | ❌ | ✅ (conservative recovery rates + risk scoring) |
+| Prioritised recommendations | ❌ | ✅ (priority\_score = savings × risk adjustment) |
+| Open-source, zero cost | ❌ | ✅ |
 
 ---
 
-### Value of the Enhanced System
+### Contributor Responsibilities
+
+| Contributor | Phase 1 | Phase 2 |
+|---|---|---|
+| **Keerthi Rapolu** | dbt project, Azure/GCP normalization, NEC modeling, shared cost engine, Streamlit dashboard (all pages) | Waste detection engine, causal reasoning engine, impact simulation engine, dashboard pages 04–05, `_shared.py`, `waste_thresholds.yml` |
+| **Rishika Naha** | AWS normalization, tag allocator, untagged heuristic engine, ML classifier, synthetic data generators, GitHub Actions CI/CD | Background & related work (paper), untagged attribution paper section, implementation & evaluation |
+
+---
+
+### Value Delivered
 
 | Dimension | Value |
 |---|---|
-| Technical | Moves from reporting → intelligence; adds AI-driven reasoning; enables automation of cost analysis |
-| Business | Reduces cloud waste; improves cost efficiency; enables proactive optimization |
-| Strategic | Transforms FinOps from reactive → proactive, descriptive → prescriptive |
-
-**Final positioning:** A multi-cloud cost intelligence framework that combines attribution, waste detection, causal reasoning, and impact simulation to enable automated and explainable FinOps optimization.
+| **Technical** | Moves FinOps from reporting to intelligence; deterministic causal reasoning over billing data; modular three-engine architecture with clear input/output contracts |
+| **Business** | Identifies recoverable waste with team ownership and dollar estimates; prioritises actions by ROI and risk; reduces investigation time from hours to seconds |
+| **Research** | First open-source framework to combine multi-cloud NEC normalization, waste taxonomy, causal billing reasoning, and impact simulation in a single reproducible pipeline |
+| **Strategic** | Transforms FinOps posture from reactive (investigate alerts after the fact) to proactive (surface optimization opportunities continuously) |
 
 ---
 
@@ -567,6 +581,124 @@ RULES = [
 
 ---
 
+### 6.4 Waste Detection Engine (`intelligence/waste_detector.py`)
+
+Entry point: `run(df: pd.DataFrame) → list[WasteFinding]`
+
+Reads `fct_unified_billing` as a DataFrame and applies four independent detectors. All numeric thresholds are read from `config/waste_thresholds.yml` via `_load_thresholds()` — sensitivity can be adjusted without modifying code.
+
+**`WasteFinding` dataclass fields:**
+```
+resource_id         str
+allocated_team      str   # 'unattributed' if None/NaN
+cloud_provider      str
+service_category    str
+waste_type          str   # one of the four taxonomy values
+estimated_waste     float # dollars
+confidence          float # 0.0–1.0
+detail              str   # human-readable evidence string
+```
+
+**Detector logic:**
+
+| Detector | Source column(s) | Confidence basis |
+|---|---|---|
+| `unused_commitment` | `is_commitment_waste`, `nec_waste` | Deterministic — 1.0 when `nec_waste > floor` |
+| `idle_compute` | `nec_used`, `vcpu`, `service_category == 'Compute'` | Proportional to how far below the idle threshold the per-vCPU cost falls |
+| `zombie_resource` | `nec_used` aggregated per `resource_id` for billing month | Fixed at 0.85 — no utilization data, billing-side approximation only |
+| `underutilized_commitment` | `nec_used`, `list_cost`, `discount_type in ('ri','sp')` | Proportional to distance below utilization threshold |
+
+**Design constraint:** The engine operates on billing data only. Real CPU/memory utilization metrics (CloudWatch, Azure Monitor, GCP Cloud Monitoring) are not available in this implementation. `idle_compute` and `zombie_resource` findings are therefore estimates, not ground truth, and carry sub-1.0 confidence scores accordingly.
+
+---
+
+### 6.5 Causal Reasoning Engine (`intelligence/causal_engine.py`)
+
+Entry point: `run(df: pd.DataFrame, waste_findings: list[WasteFinding]) → list[CausalInsight]`
+
+**Key dataclasses:**
+
+```python
+@dataclass
+class RootCause:
+    fact_type:   str    # e.g. 'commitment_waste_identified'
+    description: str    # human-readable, team-scoped explanation
+    confidence:  float  # 0.0–1.0
+
+@dataclass
+class CausalInsight:
+    team:         str
+    root_causes:  list[RootCause]   # sorted by confidence DESC
+    trend:        str               # 'increasing' | 'decreasing' | 'stable' | 'insufficient_data'
+    anomaly:      bool
+    anomaly_zscore: float | None
+    period_nec:   float             # current period total NEC
+    mom_change_pct: float | None    # None if < 2 months available
+```
+
+**Processing pipeline:**
+1. `build_nec_trend(df)` — aggregate NEC per team per `billing_month`; compute `pct_change` between consecutive months
+2. `compute_zscore_anomaly(trend_df)` — for the latest period, `z = (nec − mean(prior)) / std(prior)`; requires ≥ 3 periods
+3. `build_causal_facts(df, waste_findings)` — derive fact signals per team from: commitment waste presence, idle resource count, untagged NEC fraction, dominant service category NEC share, MoM direction
+4. `reason(facts, trend, scope)` → `CausalInsight` for one team — converts each fact to a `RootCause` with a contextual description and evidence-scaled confidence score
+
+**Fact-to-confidence mapping:**
+
+| Fact type | Confidence | Escalation condition |
+|---|---|---|
+| `commitment_waste_identified` | 0.95 | `waste_pct > 20%` → 0.99 |
+| `idle_resources_detected` | 0.80 | count > 5 → 0.90 |
+| `untagged_cost_gap` | 0.75 | untagged fraction > 40% → 0.88 |
+| `service_category_dominance` | 0.65 | dominant share > 70% → 0.78 |
+| `team_cost_spike` | 0.88 | z-score ≥ 3.0 → 0.95 |
+| `team_cost_decrease` | 0.70 | — |
+
+---
+
+### 6.6 Impact Simulation Engine (`intelligence/impact_simulator.py`)
+
+Entry point: `run(waste_findings: list[WasteFinding]) → list[Recommendation]`
+
+**`Recommendation` TypedDict fields:**
+```python
+{
+    "resource_id":        str,
+    "allocated_team":     str,
+    "waste_type":         str,
+    "action":             str,        # ACTION_MAP[waste_type]
+    "estimated_savings":  float,
+    "savings_pct":        float,      # fraction of estimated_waste recoverable
+    "risk":               str,        # 'Low' | 'Medium' | 'High'
+    "priority_score":     float,      # estimated_savings × (1 − risk_weight)
+    "rationale":          str,        # 1–2 sentence justification
+    "cloud_provider":     str,
+    "service_category":   str,
+    "confidence":         float,
+}
+```
+
+**Recovery rates and risk classification:**
+
+```python
+RECOVERY_RATES = {
+    "unused_commitment":        1.00,  # 100% — entire waste stream is recoverable
+    "idle_compute":             0.60,  # 60%  — right-sizing, not full removal
+    "zombie_resource":          0.90,  # 90%  — near-full recovery; 10% buffer for egress
+    "underutilized_commitment": 0.50,  # 50%  — partial release or exchange
+}
+
+RISK_LEVELS = {
+    "unused_commitment":        "Low",
+    "idle_compute":             "Low",
+    "zombie_resource":          "Medium",
+    "underutilized_commitment": "Medium",
+}
+```
+
+Output is sorted by `priority_score` descending. The dashboard's Waste & Recommendations page (page 04) uses this ranked list to render the action table, quick-wins panel, and before/after scenario comparison.
+
+---
+
 ## 7. Technology Stack
 
 ### Selected Tools (all free)
@@ -574,12 +706,13 @@ RULES = [
 | Layer | Tool | Why |
 |---|---|---|
 | Data transform | dbt Core + DuckDB | SQL-first, version-controlled, runs locally, no infra |
-| Processing | Python 3.11 + pandas | Universal, sufficient for demo scale |
+| Processing | Python 3.11 + pandas + PyArrow | Universal, sufficient for demo scale; PyArrow for Parquet I/O |
+| Intelligence | Python + PyYAML + NumPy | Deterministic waste detection, causal reasoning, impact simulation — config-driven, no LLM required |
 | Orchestration | GitHub Actions | Free 2000 min/mo, CI/CD + pipeline trigger |
-| Dashboard | Streamlit Cloud | Free tier deploy, Python-native |
-| ML (optional) | scikit-learn | Lightweight classifier, no GPU needed |
+| Dashboard | Streamlit + Plotly | Free tier deploy, Python-native, Plotly for interactive charts |
+| ML (optional) | scikit-learn | Lightweight `RandomForestClassifier` for untagged attribution, no GPU needed |
 | Version control | GitHub | Repo + Actions + Pages, all free |
-| Notebook demos | Google Colab | No setup, shareable, free GPU |
+| Notebook demos | Jupyter / Google Colab | No setup, shareable, free GPU |
 | Task tracking | GitHub Projects | Kanban, linked to Issues/PRs, unlimited free |
 | Docs | MkDocs + GitHub Pages | Versioned with code, free deploy |
 
