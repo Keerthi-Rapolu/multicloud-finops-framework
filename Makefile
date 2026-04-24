@@ -25,7 +25,7 @@ data:
 	python load_synthetic.py --month $(MONTH) --scenario $(SCENARIO) --force
 
 dbt:
-	cd dbt_project && dbt run
+	cd dbt_project && dbt run --full-refresh
 
 test:
 	pytest tests/ -v

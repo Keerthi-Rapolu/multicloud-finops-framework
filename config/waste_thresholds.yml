@@ -1,0 +1,71 @@
+# Waste detection thresholds
+#
+# Loaded by intelligence/waste_detector.py at runtime.
+# All dollar values are in USD. All fractions are 0.0–1.0.
+#
+# Tuning guide:
+#   - Raise min_waste_dollars to reduce noise in large datasets.
+#   - Lower *_threshold values to catch more marginal waste (more findings, lower precision).
+#   - Raise *_threshold values for conservative flagging (fewer findings, higher precision).
+
+# ------------------------------------------------------------------
+# Global filter — findings below this dollar amount are suppressed
+# regardless of waste type (avoids surfacing $0.01 anomalies)
+# ------------------------------------------------------------------
+min_waste_dollars: 1.00
+
+# ------------------------------------------------------------------
+# unused_commitment
+# Applies to rows where is_commitment_waste = true.
+# A row is flagged if nec_waste > min_waste_dollars (no extra threshold
+# needed — billing already marks these as unused).
+# Confidence is high because the waste is directly observed in billing data.
+# ------------------------------------------------------------------
+unused_commitment:
+  # No additional threshold — is_commitment_waste = true is sufficient.
+  # min_waste_dollars applies.
+  pass: true
+
+# ------------------------------------------------------------------
+# idle_compute
+# Applies to Compute rows (service_category = 'Compute') with vcpu != null.
+# Proxy metric: cost_per_vcpu_hour = nec_used / (vcpu * usage_amount)
+#   where usage_amount is hours for compute rows.
+# A low cost_per_vcpu_hour means the instance is barely doing work
+# relative to its provisioned size.
+# Note: this is a billing proxy — real CPU utilisation requires CloudWatch.
+# ------------------------------------------------------------------
+idle_compute:
+  # Flag if cost_per_vcpu_hour is below this value ($/vCPU-hour)
+  nec_per_vcpu_hour_threshold: 0.005
+
+# ------------------------------------------------------------------
+# zombie_resource
+# Applies to all service categories.
+# A resource is a zombie if its total nec_used for the billing month
+# is above zero (so it's not just an RI fee row) but below this floor.
+# Rationale: resources costing less than $2/month are likely forgotten.
+# ------------------------------------------------------------------
+zombie_resource:
+  monthly_nec_threshold: 2.00
+
+# ------------------------------------------------------------------
+# underutilized_commitment
+# Applies to rows where discount_type in ('ri', 'sp').
+# Grouped by resource_id + billing_month.
+# used_fraction = SUM(nec_used) / (SUM(nec_used) + SUM(nec_waste))
+# Flag if used_fraction < threshold AND total commitment > min_waste_dollars.
+# ------------------------------------------------------------------
+underutilized_commitment:
+  used_fraction_threshold: 0.70   # less than 70% utilisation = underutilised
+
+# ------------------------------------------------------------------
+# Confidence scores assigned per waste type.
+# Higher = more directly observable in billing data.
+# Lower = inferred from proxy metrics.
+# ------------------------------------------------------------------
+confidence:
+  unused_commitment:        0.95   # directly flagged in billing export
+  idle_compute:             0.75   # inferred via cost-per-vcpu proxy
+  zombie_resource:          0.80   # inferred from low monthly total
+  underutilized_commitment: 0.85   # directly computed from billing rows

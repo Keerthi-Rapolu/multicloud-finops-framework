@@ -66,7 +66,7 @@ flowchart TD
     ALC --> DSH
 
     subgraph DSH["📊  LAYER 6 · DASHBOARD"]
-        D1["Streamlit + Plotly\nOverview · Team Allocation · Tagging Coverage · Shared Costs · Untagged"]
+        D1["Streamlit + Plotly\nOverview · Cost Allocation · Tagging & Attribution\nWaste & Recommendations · Cost Intelligence"]
     end
 
     classDef srcNode fill:#1a2f4a,stroke:#4a9eff,color:#e8f4ff
@@ -229,23 +229,34 @@ multicloud-finops-framework/
 │   └── untagged_ml.py          # Optional RandomForest classifier
 │
 ├── config/
-│   ├── shared_cost_weights.yml # Per-service strategy + team weights
-│   └── heuristic_rules.yml     # Pattern → team rules for untagged attribution
+│   ├── shared_cost_weights.yml # per-service strategy + team weights
+│   ├── heuristic_rules.yml     # pattern → team rules for untagged attribution
+│   └── waste_thresholds.yml    # idle / utilization thresholds per service type
+│
+├── intelligence/               # Phase 2 cost intelligence layer
+│   ├── __init__.py
+│   ├── waste_detector.py       # idle / zombie / underutilized resource detection
+│   ├── causal_engine.py        # root cause reasoning over billing cost trends
+│   └── impact_simulator.py     # estimate savings + risk for optimization actions
 │
 ├── dashboard/                  # Streamlit dashboard
 │   ├── app.py
+│   ├── _shared.py              # shared UI helpers, color constants, diagnose()
 │   └── pages/
 │       ├── 01_overview.py
-│       ├── 02_team_allocation.py
-│       ├── 03_tagging_coverage.py
-│       ├── 04_shared_costs.py
-│       └── 05_untagged_resources.py
+│       ├── 02_allocation.py    # Cost Allocation (team NEC + commitments + shared costs)
+│       ├── 03_tagging.py       # Tagging & Attribution (coverage + SLA tracker)
+│       ├── 04_waste_recommendations.py  # Waste & Recommendations (5-step pipeline)
+│       └── 05_insights.py      # Cost Intelligence (causal engine + decision cards)
 │
 ├── tests/
 │   ├── test_nec_model.py       # NEC aggregation, waste, utilization
 │   ├── test_shared_cost.py     # proportional / even / weighted strategies
 │   ├── test_normalization.py   # ingestion schema validation per cloud
-│   └── test_untagged.py        # heuristic rule engine + coverage metrics
+│   ├── test_untagged.py        # heuristic rule engine + coverage metrics
+│   ├── test_waste_detector.py  # waste detection across all four waste types
+│   ├── test_causal_engine.py   # causal fact building + root cause reasoning
+│   └── test_impact_simulator.py  # savings estimation + risk scoring
 │
 ├── docs/                       # MkDocs source → GitHub Pages
 │   ├── index.md
@@ -367,10 +378,10 @@ The Streamlit dashboard has a home page plus 5 detail pages — run with `make d
 |---|---|
 | **Home (executive summary)** | Portfolio KPIs; spend-by-cloud stacked bar; traffic-light health signals for commitment waste %, tagging gap %, and top cost centre; navigation guidance |
 | **Overview** | 5 KPI tiles (list cost, NEC, savings vs list cost, waste, waste %); daily NEC trend with z-score anomaly markers and explanation; savings by pricing model (on_demand / RI / SP); top commitment waste contributors; cloud summary table; 3 insight callouts with actionable recommendations |
-| **Team Allocation** | Per-team NEC table, RI/SP utilization rate, idle commitment waste detail |
-| **Tagging Coverage** | Tagged % by cloud, service, and account; enforcement alert when untagged NEC ≥ 10%; top untagged accounts with owner-missing flag; top services driving the attribution gap with % labels; per-section recommendations |
-| **Shared Costs** | Distribution by strategy (proportional / even / weighted); weighted uses configured business-unit weights (Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%); per-strategy recommendation |
-| **Untagged Resources** | Untagged NEC trend over time; service breakdown with % of untagged NEC; account table with explicit Priority thresholds (High = >15% of untagged NEC and ≥30% own untagged rate; Medium = 5–15%; Low = <5%) and owner-missing flag; per-section recommendations |
+| **Cost Allocation** | Per-team NEC breakdown; commitment utilization (RI/SP) with 100% target line; shared cost distribution by strategy (proportional / even / weighted — Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%); idle commitment waste detail table |
+| **Tagging & Attribution** | Coverage analytics by cloud / service / account; ownership assignment; SLA-based escalation tracker (7-day fix-it SLA); tag quality scoring; enforcement alerts when untagged NEC ≥ 10% |
+| **Waste & Recommendations** | 5-step waste-to-action pipeline: (1) waste breakdown by type and team, (2) cross-cloud inefficiency charts (absolute and relative), (3) prioritised action list with savings estimates, (4) quick wins (low risk, act now), (5) projected before/after impact and scenario comparison |
+| **Cost Intelligence** | AI-driven decision engine: top 3 weekly ROI actions; team decision cards with root cause analysis, evidence, and confidence scores; cost trend by team; anomaly explanations with causal attribution; system reasoning layer transparency |
 
 > All data is synthetic — cloud distribution does not reflect real-world proportions.
 
@@ -392,7 +403,7 @@ This version is a **local, synthetic-data reference implementation**. It is desi
 | **No auth / secrets handling** | Production deployments would need cloud credential management (IAM roles, Workload Identity, etc.) |
 | **Azure shared-cost spreading** | Currently done in the dbt intermediate layer; AWS and GCP pass through `tag_team` as-is |
 
-**Future work:** real-time streaming ingestion, PySpark adapter for >50GB datasets, NL query interface over the mart (potential LangGraph integration), cross-cloud RI arbitrage analysis.
+**Future work:** real-time streaming ingestion, PySpark adapter for >50GB datasets, NL query interface over the mart (potential LangGraph integration), cross-cloud RI arbitrage analysis, integration with live observability signals (CloudWatch, Azure Monitor) to strengthen causal reasoning.
 
 ---
 

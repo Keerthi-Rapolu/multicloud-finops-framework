@@ -1,27 +1,185 @@
-# Multi-Cloud FinOps Cost Attribution Framework
-## Design Document v1.0
+# Multi-Cloud FinOps Cost Intelligence System
+## Design Document v2.0
 
 **Project:** Research Paper + GitHub Demo  
-**Authors:** Keerthi Rapolu + Rishika Naha 
+**Authors:** Keerthi Rapolu + Rishika Naha  
 **Date:** April 2026  
-**Status:** In Progress — implementation complete; paper drafting underway
+**Status:** Complete — Phase 1 (Cost Allocation Framework) and Phase 2 (Cost Intelligence Layer) both implemented
+
+---
+
+## Project Evolution: Cost Allocation Framework → Cost Intelligence System
+
+### Overview
+
+This project originally focuses on multi-cloud cost ingestion, normalization, and attribution across AWS, Azure, and GCP.
+
+The next phase evolves it into a **Causal Cost Intelligence System** that detects inefficiencies, explains cost behavior, and quantifies optimization impact.
+
+---
+
+### Existing Capabilities (Phase 1 — Already Implemented)
+
+The current system provides a strong data engineering and FinOps foundation.
+
+#### Multi-Cloud Cost Ingestion & Normalization
+- Ingests billing data from AWS, Azure, GCP
+- Standardizes schema across providers
+- Handles pricing model differences (On-Demand, RI, Savings Plans)
+
+**Purpose:** Create a unified cost dataset for downstream processing.
+
+#### NEC (Normalized Effective Cost) Layer
+- Computes `nec_used` → actual usage cost, `nec_waste` → unused commitment cost
+- Eliminates billing distortions (RI/SP masking)
+
+**Purpose:** Ensure financial correctness; enable accurate cost comparison and analysis.
+
+#### Cost Attribution Layer (Rishika's Contribution)
+- **Tag-Based Allocation** — maps resources to teams/services using tags
+- **Untagged Heuristics** — assigns ownership when tags are missing using rule-based logic
+
+**Output:** `resource_id → team/service → confidence_score`
+
+**Purpose:** Answer "Who owns this cost?"
+
+#### Unified Cost Data Model
+Centralized cost mart supporting reporting and dashboards.
+
+---
+
+### Limitations of Phase 1
+
+| Gap | Description |
+|---|---|
+| No Waste Identification | Cannot identify idle or inefficient resources |
+| No Root Cause Analysis | Detects cost but does not explain why it changed |
+| No Actionable Recommendations | No guidance on how to optimize cost |
+| No Impact Estimation | Cannot answer "If I fix this, how much will I save?" |
+| Descriptive Only | System is reporting-oriented, not analytical or prescriptive |
+
+---
+
+### Phase 2 Enhancement: Cost Intelligence Layer
+
+To address these gaps, a new **Cost Intelligence Layer** is introduced — Keerthi's contribution.
+
+#### Architecture
+
+```
+Cost Data (Normalized + NEC)
+        ↓
+Attribution Layer (Rishika)
+        ↓
+Cost Intelligence Layer (Keerthi)
+    ├── Waste Detection Engine
+    ├── Causal Reasoning Engine
+    └── Impact Simulation Engine
+```
+
+#### Waste Detection Engine
+
+**Purpose:** Identify inefficiencies and avoidable cost.
+
+Detects: idle resources, low utilization, zombie infrastructure, inefficient configurations, underutilized commitments.
+
+```json
+{
+  "resource": "ec2-123",
+  "team": "payments",
+  "issue": "idle_compute",
+  "confidence": 0.91,
+  "estimated_waste": "$420/month"
+}
+```
+
+Answers: What is waste? Where are inefficiencies? Which team is responsible?
+
+#### Causal Reasoning Engine
+
+**Purpose:** Explain why cost behavior changed.
+
+Consumes structured facts (cost trends, usage patterns, attribution, deployment events) and generates root cause explanations with confidence scores.
+
+```
+Cost increased by 18% in last 3 days.
+
+Cause:
+- Deployment reduced memory allocation
+- Retry count increased
+- Invocation duration increased
+
+Confidence: 0.84
+```
+
+Answers: Why did cost increase/decrease? What triggered the change? Is the change expected or anomalous?
+
+#### Impact Simulation Engine
+
+**Purpose:** Quantify financial impact of optimization actions.
+
+Simulates resource resizing, configuration changes, and waste removal. Estimates cost savings, risk level, and optimization priority.
+
+```
+Recommendation: Reduce EC2 instance size
+Estimated savings: $240/month (80% reduction)
+Risk: Low
+```
+
+Answers: What should I do? How much will I save? Which optimization is most valuable?
+
+---
+
+### Key Innovation
+
+The innovation is **not** in individual components, but in their integration.
+
+| Traditional FinOps | This System |
+|---|---|
+| Cost visibility, tagging, basic alerts | Attribution → Detection → Explanation → Recommendation → Impact |
+
+Unique capabilities: combines cost attribution, waste detection, causal reasoning, and financial impact simulation to produce explainable insights, actionable recommendations, and quantified outcomes.
+
+---
+
+### Phase 2 Role Separation
+
+| Contributor | Responsibility |
+|---|---|
+| Rishika Naha | Tag-based allocation, untagged heuristics, ownership mapping |
+| Keerthi Rapolu | Waste detection engine, causal reasoning engine, impact simulation engine |
+
+---
+
+### Value of the Enhanced System
+
+| Dimension | Value |
+|---|---|
+| Technical | Moves from reporting → intelligence; adds AI-driven reasoning; enables automation of cost analysis |
+| Business | Reduces cloud waste; improves cost efficiency; enables proactive optimization |
+| Strategic | Transforms FinOps from reactive → proactive, descriptive → prescriptive |
+
+**Final positioning:** A multi-cloud cost intelligence framework that combines attribution, waste detection, causal reasoning, and impact simulation to enable automated and explainable FinOps optimization.
 
 ---
 
 ## Table of Contents
 
+**Phase 1 — Cost Allocation Framework** ✅ Complete  
+**Phase 2 — Cost Intelligence Layer** ✅ Complete
+
 1. [Problem Statement](#1-problem-statement)
 2. [Project Goals](#2-project-goals)
-3. [Architecture Overview](#3-architecture-overview)
+3. [Architecture Overview](#3-architecture-overview) ← updated with Layer 4 intelligence
 4. [Data Architecture — 4-Layer Pipeline](#4-data-architecture--4-layer-pipeline)
 5. [Unified Cost Allocation Schema (CAS)](#5-unified-cost-allocation-schema-cas)
 6. [Core Modules](#6-core-modules)
 7. [Technology Stack](#7-technology-stack)
 8. [Local Development Setup](#8-local-development-setup)
-9. [Repository Structure](#9-repository-structure)
-10. [Research Paper Outline](#10-research-paper-outline)
-11. [Work Division](#11-work-division)
-12. [Task Plan & Milestones](#12-task-plan--milestones)
+9. [Repository Structure](#9-repository-structure) ← updated with `intelligence/` + new pages
+10. [Research Paper Outline](#10-research-paper-outline) ← updated title + 11 sections
+11. [Work Division](#11-work-division) ← updated Phase 1 ✅ / Phase 2 🔲
+12. [Task Plan & Milestones](#12-task-plan--milestones) ← updated with Phase 2 todos
 13. [Constraints & Guardrails](#13-constraints--guardrails)
 
 ---
@@ -91,17 +249,33 @@ Publish a research paper documenting the framework, design decisions, and evalua
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              LAYER 3: ALLOCATION ENGINE (Silver → Gold)         │
-│  • Tag-based direct allocation                                  │
-│  • Account/project-based allocation                             │
-│  • Shared cost distribution (proportional / even / weighted)   │
-│  • Untagged attribution (heuristics + optional ML)              │
-│  • NEC modeling (RI/SP amortization)                            │
+│  • Tag-based direct allocation           (Rishika Naha)         │
+│  • Account/project-based allocation      (Rishika Naha)         │
+│  • Shared cost distribution              (Keerthi Rapolu)       │
+│  • Untagged attribution (heuristics + ML)(Rishika Naha)         │
+│  • NEC modeling (RI/SP amortization)     (Keerthi Rapolu)       │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   LAYER 4: REPORTING (Gold)                     │
-│       Streamlit dashboard — per-team, per-cloud, NEC trends     │
+│              LAYER 4: COST INTELLIGENCE ENGINE  ← NEW           │
+│  ┌──────────────────────┐  ┌──────────────────────────────┐    │
+│  │  Waste Detection     │  │  Causal Reasoning Engine     │    │
+│  │  Engine              │  │  (why did cost change?)      │    │
+│  │  (idle / zombie /    │  │  structured facts →          │    │
+│  │   underutil.)        │  │  root cause + confidence     │    │
+│  └──────────────────────┘  └──────────────────────────────┘    │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  Impact Simulation Engine                                │  │
+│  │  (resize / remove waste → estimated savings + risk)      │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                         (Keerthi Rapolu)                        │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   LAYER 5: REPORTING (Gold)                     │
+│   Streamlit dashboard — cost visibility + intelligence pages    │
 │              CSV export / GitHub Pages static demo              │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -236,11 +410,11 @@ models/
 **Home page (`app.py`):** Portfolio KPIs (list cost, NEC, savings vs list cost, waste); spend-by-cloud stacked bar; executive health summary — three traffic-light signals (red/orange/green) for commitment waste %, tagging gap %, and top cost centre; navigation guidance pointing to detail pages.
 
 **Detail pages:**
-1. Overview — 5 KPI tiles (list cost, NEC, savings vs list cost, waste, waste %); daily NEC trend with z-score anomaly markers and legend; NEC by service category (donut); savings by pricing model (on_demand / RI / SP grouped bar); top commitment waste contributors (horizontal bar); cloud summary table; 3 insight callouts each with observation + **Recommendation** line (cloud dominance → commitment strategy; tagging gap → tag policy enforcement; top team → cost review)
-2. Team Allocation — NEC by team bar chart; NEC vs list cost grouped bar by team and cloud; RI/SP commitment utilization % with 100% target line; idle commitment waste detail table
-3. Tagging Coverage — tagged % by cloud / service / account; enforcement alert with recommendation when untagged NEC ≥ 10%; top untagged accounts with owner-missing flag and recommendation; top services driving attribution gap with % of untagged NEC labels and recommendation
-4. Shared Costs — proportional / even / weighted distribution; weighted shares are explicitly defined: Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10% (sourced from `config/shared_cost_weights.yml`); per-strategy recommendation (proportional for prod, even for small teams, review weighted quarterly)
-5. Untagged Resources — Untagged NEC trend over time with recommendation to block untagged deployments via CI/CD; service breakdown with % of untagged NEC; account table with Priority (High = >15% of untagged NEC AND ≥30% own-NEC untagged; Medium = 5–15%; Low = <5%) and owner-missing flag; per-section recommendations
+1. **Overview** (`01_overview.py`) — 5 KPI tiles (list cost, NEC, savings vs list cost, waste, waste %); daily NEC trend with z-score anomaly markers; savings by pricing model (on_demand / RI / SP); top commitment waste contributors; cloud summary table; 3 insight callouts with actionable recommendations
+2. **Cost Allocation** (`02_allocation.py`) — per-team NEC breakdown; commitment utilization (RI/SP) with 100% target line; shared cost distribution by strategy (proportional / even / weighted — Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%); idle commitment waste detail table; merges former Team Allocation and Shared Costs pages
+3. **Tagging & Attribution** (`03_tagging.py`) — coverage analytics by cloud / service / account; ownership assignment UI; SLA-based escalation tracker (7-day fix-it SLA per unattributed account); tag quality scoring; enforcement alerts when untagged NEC ≥ 10%; merges former Tagging Coverage and Untagged Resources pages
+4. **Waste & Recommendations** (`04_waste_recommendations.py`) — 5-step waste-to-action pipeline: (1) waste breakdown by type (unused_commitment / idle_compute / zombie_resource / underutilized_commitment) and team; (2) cross-cloud inefficiency charts absolute and relative; (3) prioritised action list with estimated savings and risk scores; (4) quick wins (low risk); (5) projected before/after impact with scenario comparison
+5. **Cost Intelligence** (`05_insights.py`) — AI-driven decision engine: top 3 weekly ROI actions; team decision cards with root cause analysis, evidence chains, and confidence scores; cost trend by team with MoM change; anomaly explanations with statistical z-score attribution; system reasoning layer transparency view
 
 ---
 
@@ -582,37 +756,49 @@ multicloud-finops-framework/
 │       └── marts/
 │           └── fct_unified_billing.sql
 │
-├── config/                     # allocation strategy configs (YAML)
+├── config/                     # allocation + intelligence configs (YAML)
 │   ├── shared_cost_weights.yml
-│   └── heuristic_rules.yml
+│   ├── heuristic_rules.yml
+│   └── waste_thresholds.yml    # NEW — idle/utilization thresholds per service type
 │
-├── allocation/
+├── allocation/                 # Phase 1 — attribution layer (Rishika Naha + Keerthi Rapolu)
 │   ├── __init__.py
 │   ├── tag_allocator.py        # Rishika Naha
 │   ├── shared_cost.py          # Keerthi Rapolu
 │   ├── nec_model.py            # Keerthi Rapolu
 │   ├── untagged_heuristic.py   # Rishika Naha
-│   └── untagged_ml.py          # Rishika Naha / Keerthi Rapolu (optional)
+│   └── untagged_ml.py          # Rishika Naha (optional)
+│
+├── intelligence/               # NEW — Phase 2 cost intelligence layer (Keerthi Rapolu)
+│   ├── __init__.py
+│   ├── waste_detector.py       # idle / zombie / underutilized resource detection
+│   ├── causal_engine.py        # root cause reasoning over cost trends + events
+│   └── impact_simulator.py     # estimate savings + risk for optimization actions
 │
 ├── dashboard/
 │   ├── app.py                  # Streamlit entrypoint
+│   ├── _shared.py              # shared UI helpers, color constants, diagnose()
 │   └── pages/
 │       ├── 01_overview.py
-│       ├── 02_team_allocation.py
-│       ├── 03_tagging_coverage.py
-│       ├── 04_shared_costs.py
-│       └── 05_untagged_resources.py
+│       ├── 02_allocation.py         # Cost Allocation (team NEC + commitments + shared costs)
+│       ├── 03_tagging.py            # Tagging & Attribution (coverage + SLA tracker)
+│       ├── 04_waste_recommendations.py  # Waste & Recommendations (5-step pipeline)
+│       └── 05_insights.py           # Cost Intelligence (causal engine + decision cards)
 │
 ├── tests/
 │   ├── test_normalization.py
 │   ├── test_nec_model.py
 │   ├── test_shared_cost.py
-│   └── test_untagged.py
+│   ├── test_untagged.py
+│   ├── test_waste_detector.py       # waste detection across all four waste types
+│   ├── test_causal_engine.py        # causal fact building + root cause reasoning
+│   └── test_impact_simulator.py     # savings estimation + risk scoring
 │
 ├── notebooks/
 │   ├── 01_schema_exploration.ipynb
 │   ├── 02_nec_modeling_demo.ipynb
-│   └── 03_untagged_attribution_demo.ipynb
+│   ├── 03_untagged_attribution_demo.ipynb
+│   └── 04_cost_intelligence_demo.ipynb  # end-to-end intelligence layer walkthrough
 │
 ├── docs/                       # MkDocs source — deployed via GitHub Pages
 │   └── index.md
@@ -627,7 +813,7 @@ multicloud-finops-framework/
 
 ## 10. Research Paper Outline
 
-**Title:** A Scalable Framework for Multi-Cloud Cost Allocation Using Data Engineering Principles
+**Title:** A Multi-Cloud Cost Intelligence Framework: Attribution, Waste Detection, Causal Reasoning, and Impact Simulation
 
 **Target venues:**
 - arXiv preprint (immediate visibility — post first)
@@ -636,56 +822,78 @@ multicloud-finops-framework/
 
 ### Sections
 
-#### 1. Introduction
+#### 1. Introduction (Both)
 - Multi-cloud growth trends across hyper-scalers (AWS, Azure, GCP)
 - FinOps as a discipline (FinOps Foundation reference)
-- Gap: no open-source, data-engineering-native cost allocation framework
-- Paper contributions (bulleted list)
+- Gap 1: no open-source, data-engineering-native cost allocation framework
+- Gap 2: existing tools are descriptive, not analytical or prescriptive
+- Paper contributions (bulleted list): unified schema, NEC modeling, attribution, waste detection, causal reasoning, impact simulation
 
-#### 2. Background & Related Work
+#### 2. Background & Related Work (Rishika Naha)
 - **FinOps basics:** What FinOps is, the FinOps lifecycle (Inform → Optimize → Operate), FinOps Foundation principles
-- **Cloud cost optimization basics:** Cloud pricing models (on-demand, reserved, spot), discount mechanisms (RI, Savings Plans, CUDs), blended vs unblended vs net effective cost
-- **Multi-cloud cost management:** Challenges of managing spend across hyper-scalers, schema heterogeneity, tagging inconsistencies, attribution gaps
-- Existing tools: CloudHealth, Apptio, AWS Cost Explorer (closed-source, expensive)
-- Academic work on cloud cost modeling
+- **Cloud cost optimization:** Cloud pricing models (on-demand, reserved, spot), discount mechanisms (RI, Savings Plans, CUDs), blended vs unblended vs net effective cost
+- **Multi-cloud cost management:** Schema heterogeneity, tagging inconsistencies, attribution gaps
+- **Causal reasoning in observability:** Existing root cause analysis approaches (Prometheus, OpenTelemetry) — gap in cost domain
+- Existing FinOps tools: CloudHealth, Apptio, AWS Cost Explorer (closed-source, expensive, no causal layer)
 - FinOps Foundation FOCUS schema (acknowledge but differentiate)
-- Our angle: open-source, reproducible, data-engineering-native
+- Our angle: open-source, reproducible, intelligence-first
 
-#### 3. Unified Cost Schema Design ← **core novelty**
+#### 3. Unified Cost Schema Design ← **core novelty** (Keerthi Rapolu)
 - Schema normalization across all three clouds
 - Field mapping table (AWS CUR / Azure / GCP)
 - Handling schema evolution (cloud providers change columns)
 - Design decisions and tradeoffs
 
-#### 4. Cost Allocation Strategies
-- Tag-based, account-based, hybrid
-- Shared cost distribution algorithms (with math)
+#### 4. Cost Allocation Strategies (Rishika Naha + Keerthi Rapolu)
+- Tag-based, account-based, hybrid (Rishika Naha)
+- Shared cost distribution algorithms with math (Keerthi Rapolu)
 - Tagging coverage analysis methodology
 - Real-world challenges (missing tags, inconsistent naming)
 
-#### 5. Net Effective Cost Modeling
+#### 5. Net Effective Cost Modeling (Keerthi Rapolu)
 - RI/SP/CUD amortization methodology
 - Blended vs unblended vs net effective cost
-- Formula and implementation
+- Formula and per-cloud implementation
 - Validation: compare NEC output vs AWS Cost Explorer
 
-#### 6. Untagged Resource Attribution
+#### 6. Untagged Resource Attribution (Rishika Naha)
 - Heuristic rule design
 - ML classifier approach (features, model, evaluation)
 - Precision/recall results on synthetic dataset
 - When heuristics beat ML and vice versa
 
-#### 7. Implementation & Evaluation
-- GitHub repo walkthrough
-- Synthetic dataset statistics
-- Dashboard screenshots
-- Pipeline performance (rows/sec, memory)
-- Limitations
+#### 7. Waste Detection Engine (Keerthi Rapolu) ← **new**
+- Taxonomy of waste: idle compute, zombie infra, low utilization, underutilized commitments
+- Detection methodology: threshold-based + pattern matching over NEC time series
+- Confidence scoring approach
+- Per-team waste breakdown with ownership attribution
+- Evaluation: precision on labelled synthetic waste records
 
-#### 8. Conclusion & Future Work
+#### 8. Causal Reasoning Engine (Keerthi Rapolu) ← **new**
+- Architecture: structured fact graph (cost trends + usage patterns + events)
+- Root cause identification algorithm
+- Confidence scoring and evidence chain representation
+- Example walkthrough: deployment → retry spike → cost increase
+- Comparison vs manual investigation baseline
+
+#### 9. Impact Simulation Engine (Keerthi Rapolu) ← **new**
+- Simulation model: resource resizing, configuration changes, waste removal
+- Savings estimation methodology
+- Risk scoring (Low / Medium / High)
+- Optimization priority ranking
+- Validation: compare estimated vs actual savings on held-out scenarios
+
+#### 10. Implementation & Evaluation (Rishika Naha)
+- GitHub repo walkthrough
+- Synthetic dataset statistics (all three clouds, both phases)
+- Dashboard screenshots (Phase 1 + Phase 2 pages)
+- End-to-end pipeline performance (rows/sec, memory)
+- Limitations and future work
+
+#### 11. Conclusion (Both)
 - FinOps certification context
 - Enterprise scale-out path (PySpark, streaming)
-- Real-time cost allocation (future)
+- Real-time cost intelligence (future)
 - Open questions
 
 ---
@@ -696,120 +904,190 @@ Division is **by functionality** — both contribute across all three hyper-scal
 
 ### Keerthi Rapolu
 
-**Core strength:** dbt, Snowflake, FinOps (ServiceNow), NEC modeling
+**Core strength:** dbt, Snowflake, FinOps (ServiceNow), NEC modeling, cost intelligence
 
-| Deliverable | File(s) |
-|---|---|
-| dbt project setup & design | `dbt_project/` |
-| Azure billing ingestion & normalization | `ingestion/azure_ingestor.py`, `stg_azure_cost.sql` |
-| GCP billing normalization | `stg_gcp_billing.sql`, `int_gcp_nec.sql` |
-| Azure NEC / reservation amortization | `int_azure_nec.sql` |
-| NEC / RI amortization module | `allocation/nec_model.py` |
-| Shared cost distribution engine | `allocation/shared_cost.py` |
-| Streamlit dashboard (all pages) | `dashboard/` |
-| Paper sections 3, 4, 5 | Schema design, allocation strategies, NEC |
+**Phase 1 — Completed**
+
+| Deliverable | File(s) | Status |
+|---|---|---|
+| dbt project setup & design | `dbt_project/` | ✅ Done |
+| Azure billing ingestion & normalization | `ingestion/azure_ingestor.py`, `stg_azure_cost.sql` | ✅ Done |
+| GCP billing normalization | `stg_gcp_billing.sql`, `int_gcp_nec.sql` | ✅ Done |
+| Azure NEC / reservation amortization | `int_azure_nec.sql` | ✅ Done |
+| NEC / RI amortization module | `allocation/nec_model.py` | ✅ Done |
+| Shared cost distribution engine | `allocation/shared_cost.py` | ✅ Done |
+| Streamlit dashboard — all Phase 1 pages | `dashboard/pages/01–05_*.py` | ✅ Done |
+
+**Phase 2 — Complete (Cost Intelligence Layer)**
+
+| Deliverable | File(s) | Status |
+|---|---|---|
+| Waste Detection Engine | `intelligence/waste_detector.py` | ✅ Done |
+| Causal Reasoning Engine | `intelligence/causal_engine.py` | ✅ Done |
+| Impact Simulation Engine | `intelligence/impact_simulator.py` | ✅ Done |
+| Waste config (idle/utilization thresholds) | `config/waste_thresholds.yml` | ✅ Done |
+| Dashboard — Waste & Recommendations page | `dashboard/pages/04_waste_recommendations.py` | ✅ Done |
+| Dashboard — Cost Intelligence page | `dashboard/pages/05_insights.py` | ✅ Done |
+| Shared dashboard utilities | `dashboard/_shared.py` | ✅ Done |
+| Intelligence unit tests | `tests/test_waste_detector.py`, `test_causal_engine.py`, `test_impact_simulator.py` | ✅ Done |
+| Intelligence demo notebook | `notebooks/04_cost_intelligence_demo.ipynb` | ✅ Done |
+| Paper sections 3, 5, 7, 8, 9 | Schema design, NEC, Waste Detection, Causal Reasoning, Impact Simulation | 🔲 Todo |
 
 ---
 
 ### Rishika Naha
 
-**Core strength:** AWS, GCP, ML
+**Core strength:** AWS, GCP, ML, CI/CD
 
-| Deliverable | File(s) |
-|---|---|
-| AWS billing ingestion & normalization | `ingestion/aws_ingestor.py`, `stg_aws_cur.sql`, `int_aws_nec.sql` |
-| GCP billing ingestion | `ingestion/gcp_ingestor.py`, `int_gcp_nec.sql` |
-| Tag-based allocation module | `allocation/tag_allocator.py` |
-| Untagged heuristic attribution engine | `allocation/untagged_heuristic.py` |
-| ML classifier (optional) | `allocation/untagged_ml.py` |
-| Synthetic data generation (all clouds) | `data/synthetic/generate_*.py` |
-| GitHub Actions CI/CD | `.github/workflows/` |
-| Paper sections 2, 6, 7 | Background, untagged attribution, demo |
+**Phase 1 — Completed**
+
+| Deliverable | File(s) | Status |
+|---|---|---|
+| AWS billing ingestion & normalization | `ingestion/aws_ingestor.py`, `stg_aws_cur.sql`, `int_aws_nec.sql` | ✅ Done |
+| GCP billing ingestion | `ingestion/gcp_ingestor.py`, `int_gcp_nec.sql` | ✅ Done |
+| Tag-based allocation module | `allocation/tag_allocator.py` | ✅ Done |
+| Untagged heuristic attribution engine | `allocation/untagged_heuristic.py` | ✅ Done |
+| ML classifier for untagged resources | `allocation/untagged_ml.py` | ✅ Done (optional) |
+| Synthetic data generation (all clouds) | `scripts/generate_*.py`, `load_synthetic.py` | ✅ Done |
+| GitHub Actions CI/CD | `.github/workflows/` | ✅ Done |
+
+**Phase 2 — Pending**
+
+| Deliverable | File(s) | Status |
+|---|---|---|
+| Paper section 2 — Background & Related Work | — | 🔲 Todo |
+| Paper section 4 — Cost Allocation Strategies (tag/untagged half) | — | 🔲 Todo |
+| Paper section 6 — Untagged Attribution | — | 🔲 Todo |
+| Paper section 10 — Implementation & Evaluation | — | 🔲 Todo |
 
 ---
 
 ### Shared
 
-| Deliverable | Notes |
-|---|---|
-| CAS schema agreement | Must agree before writing any code — Week 1 |
-| Unified gold model | `fct_unified_billing.sql` — UNION ALL of all three normalized models |
-| Paper intro & conclusion | Write together |
-| Cross-review paper sections | Swap sections before submission |
-| DuckDB schema | Design together, implement individually |
+| Deliverable | Notes | Status |
+|---|---|---|
+| CAS schema agreement | Documented in Section 5 | ✅ Done |
+| Unified gold model | `fct_unified_billing.sql` — UNION ALL of all three normalized models | ✅ Done |
+| Intelligence layer interface design | Agree on input/output contracts for `intelligence/` modules before implementation | 🔲 Todo |
+| Paper intro & conclusion | Write together | 🔲 Todo |
+| Cross-review all paper sections | Swap before submission | 🔲 Todo |
+| Post arXiv preprint | After cross-review | 🔲 Todo |
 
 ---
 
 ## 12. Task Plan & Milestones
 
-> **Tracking:** Use GitHub Projects → Board view. One Issue per task. Labels: `aws`, `azure`, `gcp`, `paper`, `infra`, `engine`, `dashboard`.
+> **Tracking:** Use GitHub Projects → Board view. One Issue per task. Labels: `aws`, `azure`, `gcp`, `paper`, `infra`, `engine`, `dashboard`, `intelligence`, `keerthi`, `rishika`.
 
-### Phase 1 — Foundation (Weeks 1–2)
+---
 
-**Infra & Schema (Both)**
-- [x] Create GitHub repo + branch strategy (`main`, `dev`, feature branches)
-- [x] Agree on and document CAS schema (this doc, Section 5)
-- [x] Set up DuckDB + dbt project skeleton (Keerthi Rapolu)
+### Phase 1 — Cost Allocation Framework ✅ COMPLETE
+
+**Infra & Schema**
+- [x] Create GitHub repo + branch strategy (`main`, `dev`, feature branches) — Both
+- [x] Agree on and document CAS schema (this doc, Section 5) — Both
+- [x] Set up DuckDB + dbt project skeleton — Keerthi Rapolu
 
 **Ingestion — all hyper-scalers**
-- [x] Generate synthetic AWS CUR data + AWS ingestion (Rishika Naha)
-- [x] Generate synthetic Azure Cost Export data + Azure ingestion (Keerthi Rapolu)
-- [x] Generate synthetic GCP Billing Export data + GCP ingestion (Rishika Naha)
+- [x] Synthetic AWS CUR data + AWS ingestion — Rishika Naha
+- [x] Synthetic Azure Cost Export data + Azure ingestion — Keerthi Rapolu
+- [x] Synthetic GCP Billing Export data + GCP ingestion — Rishika Naha
 
 **Normalization — staging models**
-- [x] `stg_azure_cost.sql` — Azure → normalized fields (Keerthi Rapolu)
-- [x] `stg_aws_cur.sql` — AWS → normalized fields (Rishika Naha)
-- [x] `stg_gcp_billing.sql` — GCP → normalized fields (Rishika Naha)
+- [x] `stg_azure_cost.sql` — Azure → normalized fields — Keerthi Rapolu
+- [x] `stg_aws_cur.sql` — AWS → normalized fields — Rishika Naha
+- [x] `stg_gcp_billing.sql` — GCP → normalized fields — Rishika Naha
 
-### Phase 2 — Core Engine (Weeks 3–4)
+**NEC calculations — Silver layer**
+- [x] `int_aws_nec.sql` — AWS RI/SP amortization — Rishika Naha
+- [x] `int_azure_nec.sql` — Azure reservation amortization — Keerthi Rapolu
+- [x] `int_gcp_nec.sql` — GCP CUD amortization — Keerthi Rapolu / Rishika Naha
 
-**NEC calculations per hyper-scaler (Silver layer)**
-- [x] `int_aws_nec.sql` — AWS RI/SP amortization (Rishika Naha)
-- [x] `int_azure_nec.sql` — Azure reservation amortization (Keerthi Rapolu)
-- [x] `int_gcp_nec.sql` — GCP CUD amortization (Keerthi Rapolu / Rishika Naha)
+**Unification & Allocation — Gold layer**
+- [x] `fct_unified_billing.sql` — UNION ALL → CAS schema — Both
+- [x] NEC / RI amortization module — `allocation/nec_model.py` — Keerthi Rapolu
+- [x] Shared cost distribution engine — `allocation/shared_cost.py` — Keerthi Rapolu
+- [x] Tag-based allocation module — `allocation/tag_allocator.py` — Rishika Naha
+- [x] Untagged heuristic attribution — `allocation/untagged_heuristic.py` — Rishika Naha
+- [x] ML classifier for untagged — `allocation/untagged_ml.py` — Rishika Naha
+- [x] Unit tests for all Phase 1 modules
 
-**Unification & Allocation (Gold layer)**
-- [x] `fct_unified_billing.sql` — UNION ALL → CAS schema (Both)
-- [x] NEC / RI amortization module — `allocation/nec_model.py` (Keerthi Rapolu)
-- [x] Shared cost distribution engine — `allocation/shared_cost.py` (Keerthi Rapolu)
-- [x] Tag-based allocation module — `allocation/tag_allocator.py` (Rishika Naha)
-- [x] Untagged heuristic attribution — `allocation/untagged_heuristic.py` (Rishika Naha)
-- [x] ML classifier for untagged — `allocation/untagged_ml.py` (Rishika Naha — optional)
-- [x] Unit tests for all modules
-
-### Phase 3 — Demo + Paper (Weeks 5–6)
-
-**Dashboard**
-- [x] Streamlit dashboard — Overview + Team Allocation pages (Keerthi Rapolu)
-- [x] Streamlit dashboard — Tagging + Shared + Untagged pages (Keerthi Rapolu)
+**Dashboard — Phase 1 pages**
+- [x] Overview + Team Allocation pages — Keerthi Rapolu
+- [x] Tagging Coverage + Shared Costs + Untagged Resources pages — Keerthi Rapolu
 
 **CI/CD**
-- [x] GitHub Actions: CI pipeline (run tests on push) (Rishika Naha)
-- [x] GitHub Actions: pipeline run (weekly schedule) (Rishika Naha)
+- [x] GitHub Actions: CI pipeline (run tests on push) — Rishika Naha
+- [x] GitHub Actions: pipeline run (weekly schedule) — Rishika Naha
 
-**Paper**
-- [ ] Section 2 — Background (FinOps basics, cost optimization, multi-cloud mgmt) (Rishika Naha)
-- [ ] Section 3 — Schema design (Keerthi Rapolu)
-- [ ] Section 4 — Allocation strategies (Keerthi Rapolu)
-- [ ] Section 5 — NEC modeling (Keerthi Rapolu)
-- [ ] Section 6 — Untagged attribution (Rishika Naha)
-- [ ] Section 7 — Implementation & evaluation (Rishika Naha)
-- [ ] Intro + Conclusion (Both)
-- [ ] Cross-review all paper sections
+---
+
+### Phase 2 — Cost Intelligence Layer ✅ COMPLETE
+
+**Intelligence layer design (Both)**
+- [x] Agree on input/output contracts for all three `intelligence/` modules
+- [x] Define waste taxonomy and threshold config schema (`config/waste_thresholds.yml`)
+- [x] Define causal fact schema
+
+**Waste Detection Engine (Keerthi Rapolu)**
+- [x] Implement `intelligence/waste_detector.py` — idle / zombie / underutilized detection
+- [x] Add per-service utilization thresholds to `config/waste_thresholds.yml`
+- [x] Write unit tests — `tests/test_waste_detector.py`
+- [x] Dashboard page — `dashboard/pages/04_waste_recommendations.py`
+
+**Causal Reasoning Engine (Keerthi Rapolu)**
+- [x] Implement `intelligence/causal_engine.py` — structured fact graph + root cause logic
+- [x] Write unit tests — `tests/test_causal_engine.py`
+- [x] Dashboard page — `dashboard/pages/05_insights.py`
+
+**Impact Simulation Engine (Keerthi Rapolu)**
+- [x] Implement `intelligence/impact_simulator.py` — savings estimation + risk scoring
+- [x] Write unit tests — `tests/test_impact_simulator.py`
+
+**Shared dashboard utilities (Keerthi Rapolu)**
+- [x] `dashboard/_shared.py` — color constants, `diagnose()`, badge renderers, action ops
+
+**Intelligence demo notebook (Keerthi Rapolu)**
+- [x] `notebooks/04_cost_intelligence_demo.ipynb` — end-to-end walkthrough of all three engines
+
+---
+
+### Phase 3 — Paper 🔲 TODO
+
+**Keerthi Rapolu**
+- [ ] Section 3 — Unified Cost Schema Design
+- [ ] Section 5 — Net Effective Cost Modeling
+- [ ] Section 7 — Waste Detection Engine
+- [ ] Section 8 — Causal Reasoning Engine
+- [ ] Section 9 — Impact Simulation Engine
+
+**Rishika Naha**
+- [ ] Section 2 — Background & Related Work
+- [ ] Section 4 — Cost Allocation Strategies (tag/untagged half)
+- [ ] Section 6 — Untagged Resource Attribution
+- [ ] Section 10 — Implementation & Evaluation
+
+**Both**
+- [ ] Section 1 — Introduction
+- [ ] Section 11 — Conclusion
+- [ ] Cross-review all sections before submission
 - [ ] Post arXiv preprint
 
-### GitHub Labels to Create
+---
+
+### GitHub Labels
 
 ```
-aws        (blue)
-azure      (teal)
-gcp        (orange)
-paper      (purple)
-infra      (gray)
-engine     (yellow)
-dashboard  (green)
-keerthi    (pink)
-rishika-naha  (light blue)
+aws          (blue)
+azure        (teal)
+gcp          (orange)
+paper        (purple)
+infra        (gray)
+engine       (yellow)
+intelligence (red)
+dashboard    (green)
+keerthi      (pink)
+rishika      (light blue)
 ```
 
 ---
@@ -820,11 +1098,14 @@ rishika-naha  (light blue)
 |---|---|
 | Cost | Every tool and service must be free. No exceptions. |
 | Real billing data | Never commit real billing data to the repo. Use synthetic data only. |
-| Scope creep | Do not add LangGraph/LangChain unless a specific NL feature is agreed upon. |
+| Intelligence layer scope | Waste detection and causal reasoning operate on structured billing + NEC data only — no external observability signals (Prometheus, CloudWatch) in Phase 2. |
+| LangGraph / LangChain | Not in scope. Intelligence layer uses deterministic logic + confidence scoring — no LLM inference pipeline unless explicitly agreed. |
 | PySpark | Not in demo. Mention as enterprise scale-out path in the paper only. |
-| Cloud preference | Both contribute across all hyper-scalers. Divide by functionality: NEC/shared-cost → Keerthi Rapolu; tag/untagged → Rishika Naha. |
-| AI use | Claude (VS Code integration) is acceptable for code + paper writing. Document usage in paper methodology. |
-| Paper scope | One unified framework paper (Option 1). Do not split into three separate papers. |
+| Work division | Phase 1 NEC / shared cost / intelligence layer → Keerthi Rapolu. Phase 1 tag / untagged / CI/CD → Rishika Naha. |
+| Interface contracts | `intelligence/` module inputs/outputs must be agreed before implementation starts — do not code against undefined schemas. |
+| AI use | Claude (VS Code integration) is acceptable for code + paper writing. Document usage in paper methodology section. |
+| Paper scope | One unified framework paper covering both Phase 1 and Phase 2. Do not split into separate papers. |
+| Dashboard pages 04–05 | Intelligence functionality (waste detection, causal reasoning, recommendations) is consolidated into pages 04 and 05 — both implemented after corresponding modules were tested. |
 
 ---
 
@@ -849,13 +1130,16 @@ Keerthi Rapolu is pursuing FinOps certification alongside this project. Relevant
 
 | FinOps Domain | Paper Section | Module |
 |---|---|---|
-| Cost Allocation | Section 4 | `tag_allocator.py`, `shared_cost.py` |
-| Rate Optimization (RI/SP) | Section 5 | `nec_model.py` |
-| Usage Optimization | Section 6 | `untagged_heuristic.py` |
-| Reporting & Analytics | Section 7 | `dashboard/` |
+| Cost Allocation | Section 4 | `allocation/tag_allocator.py`, `allocation/shared_cost.py` |
+| Rate Optimization (RI/SP) | Section 5 | `allocation/nec_model.py` |
+| Usage Optimization | Section 6 | `allocation/untagged_heuristic.py` |
+| Waste Identification | Section 7 | `intelligence/waste_detector.py` |
+| Anomaly Detection / Root Cause | Section 8 | `intelligence/causal_engine.py` |
+| Optimization Recommendations | Section 9 | `intelligence/impact_simulator.py` |
+| Reporting & Analytics | Section 10 | `dashboard/` |
 
-> The NEC modeling work in this project directly supports the FinOps certification study material on Reserved Instance and Savings Plan amortization.
+> The NEC modeling and waste detection work in this project directly supports FinOps certification study material on Reserved Instance / Savings Plan amortization and cloud efficiency optimization.
 
 ---
 
-*Last updated: April 2026*
+*Last updated: April 2026 — v2.1: Phase 2 complete; dashboard restructured to 5 pages (02_allocation, 03_tagging, 04_waste_recommendations, 05_insights); intelligence layer implemented and tested*

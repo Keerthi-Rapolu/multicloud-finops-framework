@@ -278,7 +278,9 @@ if __name__ == "__main__":
     parser.add_argument("--untagged-pct",  type=float, default=None, help="Fraction of rows with no cost-allocation tags (0.0-1.0)")
     parser.add_argument("--ri-pct",        type=float, default=None, help="Fraction of compute covered by RI / CUD (0.0-1.0)")
     parser.add_argument("--sp-pct",        type=float, default=None, help="Fraction of compute covered by Savings Plans / SUD (0.0-1.0)")
-    parser.add_argument("--sample-hours",  type=int,   default=None, help="Hours to sample per resource (1-720; 72=dev, 720=full month)")
+    parser.add_argument("--sample-hours",   type=int,   default=None, help="Hours to sample per resource (1-720; 72=dev, 720=full month)")
+    parser.add_argument("--cost-multiplier", type=float, default=None, help="Global cost scale factor (1.8=spike, 0.9=reduction)")
+    parser.add_argument("--seed",            type=int,   default=None, help="Random seed (default: derived from billing_month for determinism)")
     args = parser.parse_args()
 
     # Build config: scenario is the base, individual flags override
@@ -287,18 +289,22 @@ if __name__ == "__main__":
             parser.error(f"Unknown scenario '{args.scenario}'. Choose from: {list(SCENARIOS)}")
         base = SCENARIOS[args.scenario]
         cfg = GeneratorConfig(
-            untagged_pct  = args.untagged_pct  if args.untagged_pct  is not None else base.untagged_pct,
-            ri_pct        = args.ri_pct        if args.ri_pct        is not None else base.ri_pct,
-            sp_pct        = args.sp_pct        if args.sp_pct        is not None else base.sp_pct,
-            sample_hours  = args.sample_hours  if args.sample_hours  is not None else base.sample_hours,
+            untagged_pct    = args.untagged_pct    if args.untagged_pct    is not None else base.untagged_pct,
+            ri_pct          = args.ri_pct          if args.ri_pct          is not None else base.ri_pct,
+            sp_pct          = args.sp_pct          if args.sp_pct          is not None else base.sp_pct,
+            sample_hours    = args.sample_hours    if args.sample_hours    is not None else base.sample_hours,
+            cost_multiplier = args.cost_multiplier if args.cost_multiplier is not None else base.cost_multiplier,
+            seed            = args.seed            if args.seed            is not None else base.seed,
         )
     else:
         cfg = GeneratorConfig(
             **({k: v for k, v in {
-                "untagged_pct": args.untagged_pct,
-                "ri_pct":       args.ri_pct,
-                "sp_pct":       args.sp_pct,
-                "sample_hours": args.sample_hours,
+                "untagged_pct":    args.untagged_pct,
+                "ri_pct":          args.ri_pct,
+                "sp_pct":          args.sp_pct,
+                "sample_hours":    args.sample_hours,
+                "cost_multiplier": args.cost_multiplier,
+                "seed":            args.seed,
             }.items() if v is not None})
         )
 

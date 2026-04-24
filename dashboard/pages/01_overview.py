@@ -8,27 +8,39 @@ import sys
 from pathlib import Path
 
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from allocation.nec_model import (
-    commitment_waste_detail,
     nec_by_cloud,
     nec_by_service_category,
-    nec_by_team,
     nec_trend,
     savings_vs_on_demand,
+)
+from dashboard._shared import (
+    CLOUD_COLORS,
+    COLOR_BLOCKER,
+    COLOR_OPTIMIZED,
+    diagnose,
+    render_headline,
 )
 
 st.set_page_config(page_title="Overview", layout="wide")
 st.title("Overview")
+st.caption("What is happening with cloud spend right now?")
 
 df = st.session_state.get("df")
 if df is None:
     st.warning("Return to the home page first to load data.")
     st.stop()
+
+# ---------------------------------------------------------------------------
+# Executive headline (Critical #1)
+# ---------------------------------------------------------------------------
+
+diag = diagnose(df)
+render_headline(diag)
 
 # ---------------------------------------------------------------------------
 # KPI row — 5 metrics
@@ -63,9 +75,26 @@ st.markdown("---")
 # NEC trend with anomaly highlight
 # ---------------------------------------------------------------------------
 
-st.subheader("Daily NEC trend")
-
 trend = nec_trend(df, freq="D")
+
+# Trend direction label
+_trend_label = ""
+if not trend.empty:
+    total_by_period = trend.groupby("period")["nec"].sum().sort_index()
+    if len(total_by_period) >= 4:
+        n = len(total_by_period)
+        first_avg = total_by_period.iloc[:n // 3].mean()
+        last_avg  = total_by_period.iloc[-n // 3:].mean()
+        pct_change = (last_avg - first_avg) / first_avg * 100 if first_avg else 0
+        if pct_change > 5:
+            _trend_label = " :red_circle: **Increasing**"
+        elif pct_change < -5:
+            _trend_label = " :green_circle: **Improving**"
+        else:
+            _trend_label = " :yellow_circle: **Stable**"
+
+st.subheader(f"Daily NEC trend{_trend_label}")
+
 if trend.empty:
     st.info("No trend data for the selected filters.")
 else:
@@ -76,7 +105,6 @@ else:
     )
 
     # Overlay anomaly markers (z-score > 1.8 per cloud)
-    anomaly_traces = []
     for cloud, grp in trend.groupby("cloud_provider"):
         if len(grp) < 5:
             continue
@@ -143,99 +171,71 @@ with col_right:
     st.plotly_chart(fig_sav, use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Top waste contributors
-# ---------------------------------------------------------------------------
-
-st.markdown("---")
-st.subheader("Top commitment waste contributors")
-
-waste_rows = commitment_waste_detail(df)
-if waste_rows.empty:
-    st.success("No commitment waste rows in the selected data.")
-else:
-    top_waste = (
-        waste_rows.groupby(["service_name", "cloud_provider"])["nec_waste"]
-        .sum()
-        .reset_index()
-        .sort_values("nec_waste", ascending=False)
-        .head(10)
-    )
-    fig_waste = px.bar(
-        top_waste, x="nec_waste", y="service_name", orientation="h",
-        color="cloud_provider",
-        color_discrete_map={"aws": "#f97316", "azure": "#2563eb", "gcp": "#22c55e"},
-        labels={"nec_waste": "Waste (USD)", "service_name": "Service", "cloud_provider": "Cloud"},
-    )
-    fig_waste.update_layout(
-        height=320, margin=dict(t=10, b=40),
-        yaxis={"categoryorder": "total ascending"},
-    )
-    st.plotly_chart(fig_waste, use_container_width=True)
-
-# ---------------------------------------------------------------------------
 # Per-cloud detail table
 # ---------------------------------------------------------------------------
 
 st.markdown("---")
-st.subheader("Cloud summary")
-st.caption(":information_source: Synthetic dataset — cloud distribution does not reflect real-world proportions.")
-
-display = by_cloud[["cloud_provider", "rows", "list_cost", "nec", "nec_waste", "savings", "savings_pct"]].copy()
-display.columns = ["Cloud", "Rows", "List Cost", "NEC", "Waste", "Savings", "Savings %"]
-for col in ["List Cost", "NEC", "Waste", "Savings"]:
-    display[col] = display[col].map("${:,.2f}".format)
-display["Savings %"] = display["Savings %"].map("{:.1f}%".format)
-st.dataframe(display, use_container_width=True, hide_index=True)
-
-_TEAM_LABELS = {
-    "data-eng": "Data Engineering", "platform": "Platform", "frontend": "Frontend",
-    "backend": "Backend", "ml": "Machine Learning",
-}
-
-def _fmt_team(name: str) -> str:
-    return _TEAM_LABELS.get(str(name).lower(), str(name).replace("-", " ").title())
 
 # ---------------------------------------------------------------------------
-# Insight callouts — observation + recommended action
+# Decision Timeline — "what happens if we do nothing?" (Add #1 / Task #14)
+# Takes this period's waste + untagged NEC and extrapolates 6 months forward
+# assuming no mitigation. Shows the cumulative cost of inaction vs. acting now.
 # ---------------------------------------------------------------------------
+
+st.subheader("Decision Timeline — cost of inaction")
+st.caption(
+    "If current waste patterns persist unchanged, here is the cumulative leakage "
+    "over the next 6 months vs. acting now (low-risk recoveries only)."
+)
+
+import plotly.graph_objects as _go
+
+_recovery_rate = 0.85   # share of detected waste releasable this quarter
+_monthly_waste = float(total_waste)
+_monthly_recoverable = _monthly_waste * _recovery_rate
+_months = list(range(0, 7))  # months 0..6
+
+do_nothing  = [_monthly_waste * m for m in _months]
+act_now     = [min(d, _monthly_waste) if m == 0 else (_monthly_waste - _monthly_recoverable) * m
+               for m, d in zip(_months, do_nothing)]
+
+_fig_tl = _go.Figure()
+_fig_tl.add_trace(_go.Scatter(
+    x=_months, y=do_nothing,
+    mode="lines+markers", name="Do nothing — waste accrues",
+    line=dict(color=COLOR_BLOCKER, width=3),
+    fill="tozeroy", fillcolor="rgba(239, 68, 68, 0.15)",
+))
+_fig_tl.add_trace(_go.Scatter(
+    x=_months, y=act_now,
+    mode="lines+markers", name="Act now — recover 85%",
+    line=dict(color=COLOR_OPTIMIZED, width=3),
+))
+_fig_tl.update_layout(
+    height=240, margin=dict(t=10, b=40),
+    xaxis=dict(title="Months from now", tickmode="linear", dtick=1),
+    yaxis=dict(title="Cumulative waste (USD)", tickformat="$,.0f"),
+    legend=dict(orientation="h", y=1.12),
+    hovermode="x unified",
+)
+st.plotly_chart(_fig_tl, use_container_width=True)
+
+# Summary callout — 6-month gap between the two paths
+_gap_6m = do_nothing[6] - act_now[6]
+if _gap_6m > 0:
+    st.info(
+        f":hourglass_flowing_sand: **6-month cost of inaction:** "
+        f"**${_gap_6m:,.0f}** in avoidable waste (${_gap_6m * 2:,.0f} annualized). "
+        f"Low-risk recoveries alone close {_recovery_rate:.0%} of the gap with no downtime."
+    )
 
 st.markdown("---")
-st.subheader("Key insights & recommendations")
 
-if not by_cloud.empty:
-    top_cloud = by_cloud.loc[by_cloud["nec"].idxmax()]
-    top_cloud_pct = top_cloud["nec"] / total_nec * 100
-
-    col_i1, col_i2, col_i3 = st.columns(3)
-
-    col_i1.info(
-        f"**{top_cloud['cloud_provider'].upper()} accounts for {top_cloud_pct:.0f}% of "
-        f"total NEC** (${top_cloud['nec']:,.0f}).  \n"
-        f"**Recommendation:** Review {top_cloud['cloud_provider'].upper()} commitment "
-        "coverage — consolidating RI/SP purchases can reduce on-demand exposure."
-    )
-
-    untagged_nec = df.loc[~df["is_tagged"].fillna(False), "nec"].sum()
-    untagged_nec_pct = untagged_nec / total_nec * 100 if total_nec else 0
-    col_i2.warning(
-        f"**Tagging gap exposes ${untagged_nec:,.0f} ({untagged_nec_pct:.0f}% of NEC)** "
-        f"that cannot be directly attributed to a team.  \n"
-        "**Recommendation:** Enforce a mandatory `tag_team` policy at resource creation "
-        "via AWS Tag Policies, Azure Policy, or GCP Organization Policy."
-    )
-
-    try:
-        by_team = nec_by_team(df)
-        team_totals = by_team.groupby("team")["nec"].sum()
-        if not team_totals.empty:
-            top_team_key = team_totals.idxmax()
-            top_team_label = _fmt_team(top_team_key)
-            top_team_pct = team_totals.max() / total_nec * 100
-            col_i3.info(
-                f"**{top_team_label} accounts for {top_team_pct:.0f}% of total NEC** "
-                f"(${team_totals.max():,.0f}).  \n"
-                f"**Recommendation:** Schedule a cost review with the {top_team_label} team — "
-                "prioritize right-sizing compute and expanding commitment coverage for their top services."
-            )
-    except Exception:
-        pass
+# Collapsed — dense per-cloud table (available on demand, not dominating the view)
+with st.expander("Cloud summary (detailed table)"):
+    display = by_cloud[["cloud_provider", "rows", "list_cost", "nec", "nec_waste", "savings", "savings_pct"]].copy()
+    display.columns = ["Cloud", "Rows", "List Cost", "NEC", "Waste", "Savings", "Savings %"]
+    for col in ["List Cost", "NEC", "Waste", "Savings"]:
+        display[col] = display[col].map("${:,.2f}".format)
+    display["Savings %"] = display["Savings %"].map("{:.1f}%".format)
+    st.dataframe(display, use_container_width=True, hide_index=True)

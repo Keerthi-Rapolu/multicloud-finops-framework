@@ -15,7 +15,6 @@ from pathlib import Path
 
 from scripts.config import GeneratorConfig
 
-random.seed(42)
 
 BILLING_ACCOUNT = "ABCDEF-123456-ABCDEF"
 
@@ -273,14 +272,16 @@ def generate(billing_month: str = "2026-03", cfg: GeneratorConfig | None = None)
     if cfg is None:
         cfg = GeneratorConfig()
 
+    _seed = cfg.seed if cfg.seed is not None else (hash(billing_month) & 0xFFFF_FFFF)
+    random.seed(_seed)
+
     year, month = map(int, billing_month.split("-"))
     month_start = datetime(year, month, 1)
-    total_hours = 720
+    start_date  = date(year, month, 1)
+    next_m      = (start_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+    total_hours = int((datetime(next_m.year, next_m.month, 1) - month_start).total_seconds() // 3600)
     step        = max(1, total_hours // cfg.sample_hours)
     hours       = [month_start + timedelta(hours=h) for h in range(0, total_hours, step)][:cfg.sample_hours]
-
-    start_date = date(year, month, 1)
-    next_m     = (start_date.replace(day=28) + timedelta(days=4)).replace(day=1)
     day_starts = [datetime(year, month, 1) + timedelta(days=d)
                   for d in range((next_m - start_date).days)]
 
@@ -291,34 +292,36 @@ def generate(billing_month: str = "2026-03", cfg: GeneratorConfig | None = None)
 
     rows = []
 
+    m = cfg.cost_multiplier
+
     # --- Compute Engine: hourly ---
     for i, (project, region, zone_sfx, machine, hourly_od, team, env) in enumerate(GCE_VMS):
         for hour in hours:
             if random.random() < 0.005:   # rare brief stop
                 continue
-            rows.append(gce_row(project, region, zone_sfx, machine, hourly_od,
+            rows.append(gce_row(project, region, zone_sfx, machine, hourly_od * m,
                                 team, env, hour, credit_types[i]))
 
     # --- Cloud SQL: hourly ---
     for project, region, instance, team, env, tier, hourly_od in CLOUD_SQL:
         for hour in hours:
-            rows.append(sql_row(project, region, instance, team, env, tier, hourly_od, hour))
+            rows.append(sql_row(project, region, instance, team, env, tier, hourly_od * m, hour))
 
     # --- BigQuery Analysis: hourly (sporadic) ---
     for project, region, dataset, team, env, tb_scan, _ in BQ_DATASETS:
         for hour in hours:
-            row = bq_analysis_row(project, region, dataset, team, env, tb_scan, hour)
+            row = bq_analysis_row(project, region, dataset, team, env, tb_scan * m, hour)
             if row:
                 rows.append(row)
 
     # --- GCS Storage + BQ Storage: daily ---
     for project, region, bucket, team, env, gb, storage_class in GCS_BUCKETS:
         for day_start in day_starts:
-            rows.append(gcs_row(project, region, bucket, team, env, gb, storage_class, day_start))
+            rows.append(gcs_row(project, region, bucket, team, env, gb * m, storage_class, day_start))
 
     for project, region, dataset, team, env, _, tb_store in BQ_DATASETS:
         for day_start in day_starts:
-            rows.append(bq_storage_row(project, region, dataset, team, env, tb_store, day_start))
+            rows.append(bq_storage_row(project, region, dataset, team, env, tb_store * m, day_start))
 
     # Apply untagged_pct: strip labels from a fraction of tagged rows
     rng = random.Random(99)

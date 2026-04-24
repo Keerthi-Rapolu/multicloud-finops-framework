@@ -13,8 +13,6 @@ from pathlib import Path
 
 from scripts.config import GeneratorConfig, SCENARIOS
 
-random.seed(42)
-
 # ---------------------------------------------------------------------------
 # Resource catalog — fixed set of "real" resources in the account
 # ---------------------------------------------------------------------------
@@ -76,7 +74,7 @@ def _line_item_id() -> str:
 # ---------------------------------------------------------------------------
 # Build a resource registry once — deterministic "fleet"
 # ---------------------------------------------------------------------------
-def build_resources(cfg: GeneratorConfig) -> list[dict]:
+def build_resources(cfg: GeneratorConfig, cost_multiplier: float = 1.0) -> list[dict]:
     resources = []
     discount_pool = cfg.discount_pool()
 
@@ -112,7 +110,7 @@ def build_resources(cfg: GeneratorConfig) -> list[dict]:
             "discount": discount,
             "ri_arn": _ri_arn(account, region) if discount == "ri" else "",
             "sp_arn": _sp_arn(account) if discount == "sp" else "",
-            "od_rate": INSTANCE_TYPES[itype]["od_rate"],
+            "od_rate": INSTANCE_TYPES[itype]["od_rate"] * cost_multiplier,
             "norm_factor": INSTANCE_TYPES[itype]["norm"],
         })
 
@@ -135,6 +133,7 @@ def build_resources(cfg: GeneratorConfig) -> list[dict]:
             "team": team,
             "env": env,
             "storage_gb": gb,
+            "cost_rate": 0.023 * cost_multiplier,
         })
 
     # Shared infra — always untagged (no team owner); picked up by shared_cost.py
@@ -145,7 +144,7 @@ def build_resources(cfg: GeneratorConfig) -> list[dict]:
         "region": "us-east-1",
         "team": None,
         "env": "prod",
-        "od_rate": 0.045,          # $0.045/hr per NAT gateway
+        "od_rate": 0.045 * cost_multiplier,
     })
     resources.append({
         "type": "vpc_vpn",
@@ -154,7 +153,7 @@ def build_resources(cfg: GeneratorConfig) -> list[dict]:
         "region": "us-east-1",
         "team": None,
         "env": "prod",
-        "od_rate": 0.05,           # $0.05/hr per VPN connection
+        "od_rate": 0.05 * cost_multiplier,
     })
     resources.append({
         "type": "cloudtrail",
@@ -163,7 +162,7 @@ def build_resources(cfg: GeneratorConfig) -> list[dict]:
         "region": "us-east-1",
         "team": None,
         "env": "prod",
-        "od_rate": 0.10,           # ~$0.10/hr equiv for org-level trail events
+        "od_rate": 0.10 * cost_multiplier,
     })
 
     # RDS instances
@@ -182,7 +181,7 @@ def build_resources(cfg: GeneratorConfig) -> list[dict]:
             "region": region,
             "team": team,
             "env": env,
-            "od_rate": rate,
+            "od_rate": rate * cost_multiplier,
         })
 
     return resources
@@ -302,8 +301,8 @@ def ec2_row(res: dict, hour_start: datetime, billing_start: str, billing_end: st
 
 def s3_row(res: dict, hour_start: datetime, billing_start: str, billing_end: str) -> dict:
     gb          = res["storage_gb"]
-    # S3 Standard: $0.023/GB-month -> hourly fraction
-    monthly_cost = gb * 0.023
+    rate         = res.get("cost_rate", 0.023)
+    monthly_cost = gb * rate
     hourly_cost  = round(monthly_cost / (30 * 24) * random.uniform(0.98, 1.02), 8)
     region       = res["region"]
     account      = res["account"]
@@ -331,12 +330,12 @@ def s3_row(res: dict, hour_start: datetime, billing_start: str, billing_end: str
         "lineItem/UsageAmount":             round(gb * random.uniform(0.999, 1.001), 4),
         "lineItem/NormalizationFactor":     "",
         "lineItem/NormalizedUsageAmount":   "",
-        "lineItem/UnblendedRate":           round(0.023 / (30 * 24), 10),
+        "lineItem/UnblendedRate":           round(rate / (30 * 24), 10),
         "lineItem/UnblendedCost":           hourly_cost,
-        "lineItem/BlendedRate":             round(0.023 / (30 * 24), 10),
+        "lineItem/BlendedRate":             round(rate / (30 * 24), 10),
         "lineItem/BlendedCost":             hourly_cost,
         "pricing/unit":                     "GB-Mo",
-        "pricing/publicOnDemandRate":       0.023,
+        "pricing/publicOnDemandRate":       rate,
         "pricing/publicOnDemandCost":       hourly_cost,
         "product/ProductName":              "Amazon Simple Storage Service",
         "product/instanceType":             "",
@@ -631,17 +630,21 @@ def generate(billing_month: str = "2026-03", cfg: GeneratorConfig | None = None)
     if cfg is None:
         cfg = GeneratorConfig()
 
+    _seed = cfg.seed if cfg.seed is not None else (hash(billing_month) & 0xFFFF_FFFF)
+    random.seed(_seed)
+
     year, month = map(int, billing_month.split("-"))
     billing_start = f"{year}-{month:02d}-01T00:00:00Z"
     next_month    = datetime(year, month, 1) + timedelta(days=32)
     billing_end   = f"{next_month.year}-{next_month.month:02d}-01T00:00:00Z"
 
-    month_start = datetime(year, month, 1)
-    total_hours = 720
-    step        = max(1, total_hours // cfg.sample_hours)
-    hours       = [month_start + timedelta(hours=h) for h in range(0, total_hours, step)][:cfg.sample_hours]
+    month_start  = datetime(year, month, 1)
+    next_m_start = datetime(next_month.year, next_month.month, 1)
+    total_hours  = int((next_m_start - month_start).total_seconds() // 3600)
+    step         = max(1, total_hours // cfg.sample_hours)
+    hours        = [month_start + timedelta(hours=h) for h in range(0, total_hours, step)][:cfg.sample_hours]
 
-    resources = build_resources(cfg)
+    resources = build_resources(cfg, cost_multiplier=cfg.cost_multiplier)
 
     # Guarantee exactly round(n * untagged_pct) resources are untagged.
     # Probabilistic per-resource check can produce 0 untagged with certain seeds.

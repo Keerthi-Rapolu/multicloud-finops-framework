@@ -16,6 +16,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import duckdb
 
 from allocation.nec_model import load_billing_data, nec_by_cloud, nec_by_team
+from dashboard._shared import (
+    COLOR_BLOCKER,
+    COLOR_INEFFICIENCY,
+    COLOR_INFO,
+    COLOR_OPTIMIZED,
+    compute_maturity,
+    diagnose,
+    render_headline,
+    render_priority_badge,
+)
 
 _DB = Path(__file__).resolve().parents[1] / "finops_dbt.duckdb"
 
@@ -49,6 +59,11 @@ def _load(month: str | None):
 
 st.sidebar.title("☁️ FinOps Dashboard")
 st.sidebar.markdown("---")
+st.sidebar.markdown("### Global scope")
+st.sidebar.caption(
+    "Applies to every page. Use page-level filters (e.g. Teams, Waste type) "
+    "for drill-downs — they appear in the sidebar only on pages that support them."
+)
 
 months = _available_months()
 
@@ -82,27 +97,41 @@ st.session_state["cloud"] = selected_cloud
 st.title("AI-Ready Multi-Cloud FinOps Cost Attribution & Allocation Framework")
 st.caption("Research demo — Keerthi Rapolu & Rishika Naha, April 2026 · Synthetic dataset for demo purposes")
 
+# ---------------------------------------------------------------------------
+# Executive headline (Critical #1) — the single "so what" at the very top
+# ---------------------------------------------------------------------------
+diag = diagnose(df)
+render_headline(diag)
+
 summary = nec_by_cloud(df)
 total_list = summary["list_cost"].sum()
 total_nec = summary["nec"].sum()
 total_waste = summary["nec_waste"].sum()
 savings_pct = (1 - total_nec / total_list) * 100 if total_list else 0
 
+waste_pct    = total_waste / total_nec * 100 if total_nec else 0
+is_tagged    = df["is_tagged"].fillna(False)
+untagged_nec = df.loc[~is_tagged, "nec"].sum()
+untagged_pct = untagged_nec / total_nec * 100 if total_nec else 0
+
+# Three canonical metrics — Cloud Spend · Waste · Recoverable Savings
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("List Cost",        f"${total_list:,.0f}")
-c2.metric("Net Effective Cost", f"${total_nec:,.0f}")
-c3.metric("Savings (vs List Cost)", f"${total_list - total_nec:,.0f}",
-          delta=f"{savings_pct:.1f}% off list")
-c4.metric("Commitment Waste", f"${total_waste:,.0f}")
+c1.metric("Cloud Spend",          f"${total_nec:,.0f}",
+          delta=f"{savings_pct:.1f}% discount from list price")
+c2.metric("Waste",                f"${total_waste:,.0f}",
+          delta=f"{waste_pct:.1f}% of spend — idle commitments", delta_color="inverse")
+c3.metric("Unattributed Spend",   f"${untagged_nec:,.0f}",
+          delta=f"{untagged_pct:.1f}% has no owner", delta_color="inverse")
+c4.metric("Recoverable Savings",  f"${diag.low_risk_savings:,.0f}/mo",
+          delta="low-risk · no service interruption")
 
 st.markdown("---")
 st.subheader("Spend by cloud")
-st.caption(":information_source: Synthetic dataset — cloud distribution does not reflect real-world proportions.")
 
 fig = go.Figure([
-    go.Bar(name="NEC (used)", x=summary["cloud_provider"], y=summary["nec"],       marker_color="#2563eb"),
-    go.Bar(name="Waste",      x=summary["cloud_provider"], y=summary["nec_waste"], marker_color="#ef4444"),
-    go.Bar(name="Savings",    x=summary["cloud_provider"], y=summary["savings"],   marker_color="#22c55e"),
+    go.Bar(name="Cloud Spend", x=summary["cloud_provider"], y=summary["nec"],       marker_color=COLOR_INFO),
+    go.Bar(name="Waste",       x=summary["cloud_provider"], y=summary["nec_waste"], marker_color=COLOR_BLOCKER),
+    go.Bar(name="Discounts",   x=summary["cloud_provider"], y=summary["savings"],   marker_color=COLOR_OPTIMIZED),
 ])
 fig.update_layout(
     barmode="stack", xaxis_title="Cloud", yaxis_title="USD",
@@ -111,33 +140,77 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Executive health summary
+# Priority actions (the old "Executive Summary" section is redundant now —
+# the diagnostic block above + unified KPI row already cover the same data)
 # ---------------------------------------------------------------------------
 
 st.markdown("---")
-st.subheader("Overall financial health")
+st.markdown("### Top risks — ordered by priority")
 
-waste_pct      = total_waste / total_nec * 100 if total_nec else 0
-is_tagged      = df["is_tagged"].fillna(False)
-untagged_nec   = df.loc[~is_tagged, "nec"].sum()
-untagged_pct   = untagged_nec / total_nec * 100 if total_nec else 0
+# ---------------------------------------------------------------------------
+# Priority-ordered risk cards (Critical #2) — tagging first when it's the P0
+# ---------------------------------------------------------------------------
 
-# Health signals
-signals = []
-if waste_pct >= 10:
-    signals.append(f":red_circle: **Commitment waste is high** — {waste_pct:.1f}% of NEC is idle RI/SP capacity (>${total_waste:,.0f}). Review Team Allocation for per-account detail.")
-elif waste_pct >= 5:
-    signals.append(f":orange_circle: **Commitment waste is moderate** — {waste_pct:.1f}% of NEC is unused (>${total_waste:,.0f}). Monitor for increase.")
+def _tagging_card() -> None:
+    if untagged_pct >= 20:
+        badge = render_priority_badge("P0", "P0 — Fix first")
+        st.markdown(
+            f"{badge} &nbsp; :red_circle: **Tagging gap — PRIMARY BLOCKER**  \n"
+            f"**{untagged_pct:.1f}%** of NEC (${untagged_nec:,.0f}) is unattributed. "
+            "Every downstream metric (allocation, optimization, chargeback) is unreliable "
+            "until this is fixed. Enforce `tag_team` policy at resource creation. "
+            "Target: <10% within 60 days. → **Tagging Coverage**",
+            unsafe_allow_html=True,
+        )
+    elif untagged_pct >= 10:
+        badge = render_priority_badge("P1", "P1")
+        st.markdown(
+            f"{badge} &nbsp; :orange_circle: **Tagging gap**  \n"
+            f"{untagged_pct:.1f}% of NEC (${untagged_nec:,.0f}) cannot be directly allocated. "
+            "See **Tagging Coverage** for remediation owners.",
+            unsafe_allow_html=True,
+        )
+    else:
+        badge = render_priority_badge("P3", "OK")
+        st.markdown(
+            f"{badge} &nbsp; :green_circle: **Tagging coverage acceptable** — "
+            f"{untagged_pct:.1f}% of NEC is unattributed.",
+            unsafe_allow_html=True,
+        )
+
+def _waste_card() -> None:
+    if waste_pct >= 10:
+        badge = render_priority_badge("P0", "P0 — Fix first")
+        st.markdown(
+            f"{badge} &nbsp; :red_circle: **Commitment waste — PRIMARY BLOCKER**  \n"
+            f"**{waste_pct:.1f}%** of NEC (${total_waste:,.0f}) is idle RI/SP capacity. "
+            "Release or right-size to recover immediately. → **Waste & Recommendations**",
+            unsafe_allow_html=True,
+        )
+    elif waste_pct >= 5:
+        badge = render_priority_badge("P1", "P1")
+        st.markdown(
+            f"{badge} &nbsp; :orange_circle: **Commitment waste**  \n"
+            f"{waste_pct:.1f}% of NEC (${total_waste:,.0f}) unused. Monitor for increase.",
+            unsafe_allow_html=True,
+        )
+    else:
+        badge = render_priority_badge("P3", "OK")
+        st.markdown(
+            f"{badge} &nbsp; :green_circle: **Commitment utilization healthy** — "
+            f"waste is {waste_pct:.1f}% of NEC.",
+            unsafe_allow_html=True,
+        )
+
+# Render in priority order — the primary blocker card appears first
+if diag.primary_issue == "tagging":
+    _tagging_card()
+    _waste_card()
 else:
-    signals.append(f":green_circle: **Commitment utilization is healthy** — waste is {waste_pct:.1f}% of NEC.")
+    _waste_card()
+    _tagging_card()
 
-if untagged_pct >= 20:
-    signals.append(f":red_circle: **Tagging coverage is poor** — {untagged_pct:.1f}% of NEC (${untagged_nec:,.0f}) is unattributed. Enforce tag policies immediately.")
-elif untagged_pct >= 10:
-    signals.append(f":orange_circle: **Tagging gap requires attention** — {untagged_pct:.1f}% of NEC (${untagged_nec:,.0f}) cannot be directly allocated.")
-else:
-    signals.append(f":green_circle: **Tagging coverage is acceptable** — {untagged_pct:.1f}% of NEC is unattributed.")
-
+# Risk 3 — largest cost centre (informational)
 try:
     _team_labels = {"data-eng": "Data Engineering", "platform": "Platform", "frontend": "Frontend", "backend": "Backend", "ml": "Machine Learning"}
     by_team = nec_by_team(df)
@@ -145,15 +218,133 @@ try:
     top_team_key = team_totals.idxmax()
     top_team_label = _team_labels.get(top_team_key, top_team_key.replace("-", " ").title())
     top_pct = team_totals.max() / total_nec * 100
-    signals.append(f":blue_circle: **{top_team_label}** is the largest cost centre — {top_pct:.0f}% of total NEC (${team_totals.max():,.0f}).")
+    badge_info = render_priority_badge("P2", "INFO")
+    st.markdown(
+        f"{badge_info} &nbsp; :blue_circle: **Largest cost centre** — {top_team_label} "
+        f"accounts for {top_pct:.0f}% of total NEC (${team_totals.max():,.0f}). "
+        "→ **Cost Allocation**",
+        unsafe_allow_html=True,
+    )
 except Exception:
     pass
 
-for s in signals:
-    st.markdown(s)
+# Top 3 actions — ordered by primary issue (Critical #2)
+st.markdown("**Top 3 actions** — ordered by impact")
+col_a1, col_a2, col_a3 = st.columns(3)
+waste_saving_est = total_waste * 0.85
+
+def _action_tagging(col) -> None:
+    col.error(
+        f"**Fix tagging gaps**  \n"
+        f"**${untagged_nec:,.0f}** unattributed ({untagged_pct:.0f}% of spend)  \n"
+        f"→ Outcome: unlocks full cost optimization  \n"
+        f"Owner: Platform + FinOps · Risk: Low · SLA: **Immediate**  \n"
+        f"→ Tagging Coverage"
+    )
+
+def _action_waste(col) -> None:
+    col.success(
+        f"**Release idle commitments**  \n"
+        f"Save **${waste_saving_est:,.0f}/month**  \n"
+        f"→ Outcome: immediate cost reduction, no downtime  \n"
+        f"Owner: Cloud Platform · Risk: Low · SLA: **This week**  \n"
+        f"→ Waste & Recommendations"
+    )
+
+def _action_team(col) -> None:
+    try:
+        col.info(
+            f"**Right-size {top_team_label}**  \n"
+            f"Largest team — ${team_totals.max():,.0f} cloud spend  \n"
+            f"→ Outcome: reduce idle compute + commitment waste  \n"
+            f"Owner: {top_team_label} · Risk: Medium · SLA: **Next cycle**  \n"
+            f"→ Cost Allocation"
+        )
+    except Exception:
+        col.info("**Review largest team** — see Cost Allocation for details.")
+
+# Order actions by primary issue
+if diag.primary_issue == "tagging":
+    _action_tagging(col_a1)
+    _action_waste(col_a2)
+    _action_team(col_a3)
+else:
+    _action_waste(col_a1)
+    _action_tagging(col_a2)
+    _action_team(col_a3)
 
 st.markdown("---")
-st.caption("Navigate the pages in the sidebar to drill into each dimension. Start with **Overview** for trends, then **Tagging Coverage** and **Untagged Resources** to address attribution gaps.")
+
+# ---------------------------------------------------------------------------
+# FinOps Maturity Score — collapsed by default (not primary leadership info)
+# ---------------------------------------------------------------------------
+
+mat = compute_maturity(df, diag)
+overall = mat.overall
+overall_color = (
+    COLOR_OPTIMIZED    if overall >= 4 else
+    COLOR_INEFFICIENCY if overall >= 3 else
+    COLOR_BLOCKER
+)
+
+with st.expander(
+    f"FinOps Maturity Score — {overall} / 5.0  "
+    f"({'Implemented' if overall >= 4 else 'Developing' if overall >= 2.5 else 'Initiating'})",
+    expanded=False,
+):
+    col_m1, col_m2 = st.columns([1, 2])
+    with col_m1:
+        st.markdown(
+            f"<h1 style='color:{overall_color}; margin:0'>{overall} / 5.0</h1>"
+            f"<p style='color:#6b7280; margin:0'>Overall FinOps Maturity</p>",
+            unsafe_allow_html=True,
+        )
+    with col_m2:
+        st.markdown(
+            f"| Dimension | Score | Level |\n"
+            f"|---|---|---|\n"
+            f"| Tagging & Attribution | {mat.tag_score:.0f}/5 | {mat.tag_level} |\n"
+            f"| Commitment Efficiency | {mat.waste_score:.0f}/5 | {mat.waste_level} |\n"
+            f"| NEC Modeling | {mat.nec_score:.1f}/5 | {mat.nec_level} |\n"
+            f"| Waste Detection & AI | {mat.detect_score:.1f}/5 | {mat.detect_level} |"
+        )
+    st.info(":dart: " + mat.guidance)
+
+st.markdown("---")
+
+# ---------------------------------------------------------------------------
+# Data pipeline transparency
+# ---------------------------------------------------------------------------
+
+with st.expander("How this framework is built"):
+    st.markdown(
+        "**Data ingestion** — Three cloud sources normalised to a unified schema:  \n"
+        "- AWS Cost & Usage Report (CUR) → `data/raw/aws/`  \n"
+        "- Azure Cost Export → `data/raw/azure/`  \n"
+        "- GCP Billing Export → `data/raw/gcp/`  \n"
+        "All validated and landed to Parquet via `load_synthetic.py`.\n\n"
+        "**dbt transformation** — 7 models run in the `dbt_project/` layer:  \n"
+        "- Staging: schema normalisation per cloud  \n"
+        "- Intermediate: NEC calculation, tag propagation, shared-cost fan-out  \n"
+        "- Mart: `fct_unified_billing` — single queryable table in DuckDB\n\n"
+        "**NEC calculation** — Net Effective Cost separates real from waste:  \n"
+        "`NEC = nec_used + nec_waste` where `nec_waste` captures idle RI/SP capacity  \n"
+        "`savings = list_cost − NEC` (discount value delivered)\n\n"
+        "**Allocation logic** — three layers:  \n"
+        "1. Direct: rows with `tag_team` go straight to the team  \n"
+        "2. Shared: untagged shared infrastructure distributed via `SharedCostDistributor`  \n"
+        "3. Heuristic fallback: account-to-team mapping fills remaining gaps\n\n"
+        "**Intelligence layer** — `intelligence/` package:  \n"
+        "- `waste_detector.py`: classifies idle/zombie/underutilised resources  \n"
+        "- `causal_engine.py`: z-score anomaly detection + root-cause attribution  \n"
+        "- `impact_simulator.py`: recovery rates × confidence → savings estimates"
+    )
+
+st.caption(
+    "Navigate the pages in the sidebar to drill into each dimension. "
+    "Start with **Overview** for trends, then **Waste & Recommendations** for cost recovery.  \n"
+    ":information_source: Synthetic dataset — figures are for demo purposes only."
+)
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Rows loaded: {len(df):,}")

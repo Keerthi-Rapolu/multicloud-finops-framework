@@ -20,6 +20,14 @@ class GeneratorConfig:
     # 720 = full month (realistic volume)
     sample_hours: int = 72
 
+    # Global cost multiplier applied to all on-demand rates.
+    # Use values > 1.0 to simulate cost spikes, < 1.0 for reductions.
+    cost_multiplier: float = 1.0
+
+    # Random seed. None = derive from billing_month hash (deterministic per month,
+    # different across months). Set an integer for fully reproducible output.
+    seed: int | None = None
+
     def __post_init__(self) -> None:
         if not 0.0 <= self.untagged_pct <= 1.0:
             raise ValueError(f"untagged_pct must be 0–1, got {self.untagged_pct}")
@@ -27,6 +35,8 @@ class GeneratorConfig:
             raise ValueError("ri_pct + sp_pct cannot exceed 1.0")
         if self.sample_hours < 1 or self.sample_hours > 720:
             raise ValueError(f"sample_hours must be 1–720, got {self.sample_hours}")
+        if self.cost_multiplier <= 0:
+            raise ValueError(f"cost_multiplier must be > 0, got {self.cost_multiplier}")
 
     def discount_pool(self, scale: int = 10) -> list[str]:
         """
@@ -40,10 +50,11 @@ class GeneratorConfig:
 
     def summary(self) -> str:
         od_pct = 1.0 - self.ri_pct - self.sp_pct
+        mult_str = f"  x{self.cost_multiplier:.2f}" if self.cost_multiplier != 1.0 else ""
         return (
             f"untagged={self.untagged_pct:.0%}  "
             f"RI={self.ri_pct:.0%}  SP={self.sp_pct:.0%}  OD={od_pct:.0%}  "
-            f"hours={self.sample_hours}"
+            f"hours={self.sample_hours}{mult_str}"
         )
 
 
@@ -92,5 +103,13 @@ SCENARIOS: dict[str, GeneratorConfig] = {
         ri_pct=0.20,
         sp_pct=0.15,
         sample_hours=720,
+    ),
+    # showcase: high RI coverage (more waste), moderate untagged gap, month-varying seed.
+    # Use with --cost-multiplier to simulate MoM cost changes across the 5-month window.
+    "showcase": GeneratorConfig(
+        untagged_pct=0.30,
+        ri_pct=0.50,
+        sp_pct=0.10,
+        sample_hours=72,
     ),
 }

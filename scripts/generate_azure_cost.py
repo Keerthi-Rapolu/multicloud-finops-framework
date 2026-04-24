@@ -16,7 +16,6 @@ from pathlib import Path
 
 from scripts.config import GeneratorConfig
 
-random.seed(42)
 
 # ---------------------------------------------------------------------------
 # Subscription & resource catalog
@@ -359,6 +358,9 @@ def generate(billing_month: str = "2026-03", cfg: GeneratorConfig | None = None)
     if cfg is None:
         cfg = GeneratorConfig()
 
+    _seed = cfg.seed if cfg.seed is not None else (hash(billing_month) & 0xFFFF_FFFF)
+    random.seed(_seed)
+
     year, month = map(int, billing_month.split("-"))
     start = date(year, month, 1)
     next_m = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
@@ -398,6 +400,14 @@ def generate(billing_month: str = "2026-03", cfg: GeneratorConfig | None = None)
         # Shared-infra: cross-team resources — tagged with no team, spread in dbt
         for meter_cat, product, meter_name, svc_family, rg, region, daily_cost in SHARED_RESOURCES:
             rows.append(_shared_resource_row(meter_cat, product, meter_name, svc_family, rg, region, daily_cost, day))
+
+    # Apply cost_multiplier to all monetary columns
+    if cfg.cost_multiplier != 1.0:
+        _cost_cols = {"CostInBillingCurrency", "UnitPrice", "EffectivePrice", "PayGPrice"}
+        for row in rows:
+            for col in _cost_cols:
+                if col in row and isinstance(row[col], (int, float)) and row[col] != 0:
+                    row[col] = round(row[col] * cfg.cost_multiplier, 6)
 
     # Apply untagged_pct: strip tags from a fraction of tagged Usage rows
     tag_rng = random.Random(99)
