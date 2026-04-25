@@ -35,14 +35,40 @@ _DB = Path(__file__).resolve().parents[1] / "finops_dbt.duckdb"
 _REPO = _DB.parent
 
 
+def _db_ready() -> bool:
+    """Return True only when the expected mart exists and is queryable."""
+    if not _DB.exists():
+        return False
+
+    import duckdb
+
+    try:
+        with duckdb.connect(str(_DB), read_only=True) as con:
+            exists = con.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'marts'
+                  AND table_name = 'fct_unified_billing'
+                LIMIT 1
+                """
+            ).fetchone()
+            if not exists:
+                return False
+            con.execute("SELECT COUNT(*) FROM marts.fct_unified_billing").fetchone()
+    except Exception:
+        return False
+
+    return True
+
+
 def _bootstrap_db() -> None:
     """Build the DuckDB mart from committed synthetic CSVs on first run."""
     import re
 
     sys.path.insert(0, str(_REPO))
     from build_mart import build_mart
-    from load_synthetic import run as _ls_run
-    from scripts.config import GeneratorConfig
+    from load_synthetic import stage_land, stage_validate
 
     syn_aws = _REPO / "data" / "synthetic" / "aws"
     months = sorted(
@@ -57,16 +83,29 @@ def _bootstrap_db() -> None:
         )
         st.stop()
 
+    if _DB.exists():
+        _DB.unlink()
+
     with st.status("First-run setup - building database from synthetic data...", expanded=True) as status:
         for month in months:
             st.write(f"Loading {month}...")
-            _ls_run(billing_month=month, force=True, cfg=GeneratorConfig())
+            errors = stage_validate(month)
+            if errors:
+                st.error(f"**Synthetic data validation failed for {month}.**")
+                for cloud_errors in errors.values():
+                    for err in cloud_errors:
+                        st.write(err)
+                st.stop()
+            stage_land(month)
 
         st.write("Building DuckDB mart...")
         try:
             build_mart(_DB, _REPO / "data")
         except Exception as exc:
             st.error(f"**Mart build failed:** {exc}")
+            st.stop()
+        if not _db_ready():
+            st.error("**Mart build failed:** expected `marts.fct_unified_billing` was not created.")
             st.stop()
 
         status.update(label="Database ready - loading dashboard...", state="complete")
@@ -81,7 +120,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-if not _DB.exists():
+if not _db_ready():
     _bootstrap_db()
 
 df, _, _ = load_scoped_df(
