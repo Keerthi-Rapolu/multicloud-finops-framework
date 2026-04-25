@@ -81,6 +81,18 @@ def _row(**overrides) -> dict:
         tag_team="platform",
         tag_environment="prod",
         tag_cost_center="eng-01",
+        environment="prod",
+        cost_center="CC100",
+        business_unit="engineering",
+        application="platform-core",
+        owner_email="platform-owner@company.com",
+        workload_criticality="mission_critical",
+        sla_tier="gold",
+        cpu_util_pct=None,
+        memory_util_pct=None,
+        disk_util_pct=None,
+        idle_hours=None,
+        last_activity_at=None,
         is_tagged=True,
         allocated_team="platform",
         allocated_nec=10.0,
@@ -154,6 +166,15 @@ class TestDetectUnusedCommitments:
         assert "nec_waste" in ev
         assert "discount_type" in ev
         assert "threshold" in ev
+
+    def test_metadata_is_preserved(self):
+        df = pd.DataFrame([_row(is_commitment_waste=True, nec_waste=5.0, discount_type="ri")])
+        findings = detect_unused_commitments(df, _THRESHOLDS)
+        finding = findings[0]
+        assert finding["environment"] == "prod"
+        assert finding["business_unit"] == "engineering"
+        assert finding["application"] == "platform-core"
+        assert finding["owner_email"] == "platform-owner@company.com"
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +272,24 @@ class TestDetectIdleCompute:
         findings = detect_idle_compute(df, _THRESHOLDS)
         assert len(findings) == 0
 
+    def test_telemetry_can_flag_idle_even_when_cost_proxy_is_not_low(self):
+        df = pd.DataFrame([_row(
+            resource_id="i-telemetry-idle",
+            service_category="Compute",
+            vcpu=2,
+            usage_amount=100.0,
+            nec_used=50.0,
+            cpu_util_pct=4.0,
+            memory_util_pct=8.0,
+            disk_util_pct=6.0,
+            idle_hours=240.0,
+            last_activity_at=pd.Timestamp("2026-02-10 00:00:00"),
+        )])
+        findings = detect_idle_compute(df, _THRESHOLDS)
+        assert len(findings) == 1
+        assert findings[0]["evidence"]["signal_source"] == "telemetry+billing"
+        assert findings[0]["confidence"] > _THRESHOLDS["confidence"]["idle_compute"]
+
 
 # ---------------------------------------------------------------------------
 # detect_zombie_resources
@@ -291,10 +330,10 @@ class TestDetectZombieResources:
         assert len(findings) == 1
         assert math.isclose(findings[0]["nec_used"], 1.80, rel_tol=1e-6)
 
-    def test_confidence_matches_config(self):
+    def test_cost_only_fallback_reduces_confidence(self):
         df = pd.DataFrame([_row(resource_id="res-z", nec_used=1.50)])
         findings = detect_zombie_resources(df, _THRESHOLDS)
-        assert math.isclose(findings[0]["confidence"], 0.80)
+        assert math.isclose(findings[0]["confidence"], 0.72)
 
     def test_evidence_contains_monthly_nec_used(self):
         df = pd.DataFrame([_row(resource_id="res-z2", nec_used=1.50)])
@@ -306,6 +345,33 @@ class TestDetectZombieResources:
         df = pd.DataFrame([_row(resource_id="res-null-team", nec_used=1.50, allocated_team=None)])
         findings = detect_zombie_resources(df, _THRESHOLDS)
         assert findings[0]["allocated_team"] == "unattributed"
+
+    def test_cost_only_zombie_is_suppressed_when_telemetry_shows_recent_activity(self):
+        df = pd.DataFrame([_row(
+            resource_id="res-active-small",
+            nec_used=1.50,
+            cpu_util_pct=28.0,
+            memory_util_pct=35.0,
+            disk_util_pct=32.0,
+            idle_hours=4.0,
+            last_activity_at=pd.Timestamp("2026-02-28 00:00:00"),
+        )])
+        findings = detect_zombie_resources(df, _THRESHOLDS)
+        assert findings == []
+
+    def test_telemetry_backed_zombie_can_exceed_cost_floor(self):
+        df = pd.DataFrame([_row(
+            resource_id="res-telemetry-zombie",
+            nec_used=5.50,
+            cpu_util_pct=1.5,
+            memory_util_pct=4.0,
+            disk_util_pct=3.0,
+            idle_hours=400.0,
+            last_activity_at=pd.Timestamp("2026-01-15 00:00:00"),
+        )])
+        findings = detect_zombie_resources(df, _THRESHOLDS)
+        assert len(findings) == 1
+        assert findings[0]["evidence"]["signal_source"] == "telemetry"
 
 
 # ---------------------------------------------------------------------------

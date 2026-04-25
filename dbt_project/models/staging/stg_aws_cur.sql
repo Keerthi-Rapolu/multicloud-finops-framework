@@ -37,6 +37,11 @@ staged as (
         "lineItem/Operation"                                                as operation,
         "product/region"                                                    as region,
         "lineItem/AvailabilityZone"                                         as availability_zone,
+        try_cast("resourceMetrics/cpuUtilizationPct" as double)             as cpu_util_pct,
+        try_cast("resourceMetrics/memoryUtilizationPct" as double)          as memory_util_pct,
+        try_cast("resourceMetrics/diskUtilizationPct" as double)            as disk_util_pct,
+        try_cast("resourceMetrics/idleHours" as double)                     as idle_hours,
+        try_strptime("resourceMetrics/lastActivityAt", '%Y-%m-%dT%H:%M:%SZ') as last_activity_at,
 
         -- Usage & normalisation
         try_cast("lineItem/UsageAmount"              as double)             as usage_amount,

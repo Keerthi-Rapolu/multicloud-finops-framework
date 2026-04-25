@@ -51,6 +51,11 @@ nec as (
         -- Compute metadata (GCE rows only; null for Storage/BQ/SQL)
         compute_cores,
         compute_memory_gb,
+        cpu_util_pct,
+        memory_util_pct,
+        disk_util_pct,
+        idle_hours,
+        last_activity_at,
         is_unused_reservation,
 
         -- Cost
@@ -95,6 +100,11 @@ nec as (
         tag_team,
         tag_environment,
         tag_cost_center,
+        tag_business_unit,
+        tag_application,
+        tag_owner_email,
+        tag_workload_criticality,
+        tag_sla_tier,
         is_tagged,
         cloud_provider
 

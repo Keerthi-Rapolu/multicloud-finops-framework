@@ -51,6 +51,22 @@ staged as (
         try_cast(
             nullif({{ extract_gcp_label("system_labels", "compute_memory") }},  '')
         as integer)                                                             as compute_memory_gb,
+        try_cast(
+            nullif({{ extract_gcp_label("system_labels", "cpu_util_pct") }}, '')
+        as double)                                                              as cpu_util_pct,
+        try_cast(
+            nullif({{ extract_gcp_label("system_labels", "memory_util_pct") }}, '')
+        as double)                                                              as memory_util_pct,
+        try_cast(
+            nullif({{ extract_gcp_label("system_labels", "disk_util_pct") }}, '')
+        as double)                                                              as disk_util_pct,
+        try_cast(
+            nullif({{ extract_gcp_label("system_labels", "idle_hours") }}, '')
+        as double)                                                              as idle_hours,
+        try_strptime(
+            {{ extract_gcp_label("system_labels", "last_activity_at") }},
+            '%Y-%m-%dT%H:%M:%SZ'
+        )                                                                       as last_activity_at,
         case
             when {{ extract_gcp_label("system_labels", "is_unused_reservation") }} = 'true'
             then true else false
@@ -81,6 +97,11 @@ staged as (
         nullif(trim(lower({{ extract_gcp_label("labels", "team") }})),        '') as tag_team,
         nullif(trim(lower({{ extract_gcp_label("labels", "environment") }})), '') as tag_environment,
         nullif(trim(lower({{ extract_gcp_label("labels", "cost_center") }})), '') as tag_cost_center,
+        nullif(trim(lower({{ extract_gcp_label("labels", "business_unit") }})), '') as tag_business_unit,
+        nullif(trim(lower({{ extract_gcp_label("labels", "application") }})), '') as tag_application,
+        nullif(trim(lower({{ extract_gcp_label("labels", "owner_email") }})), '') as tag_owner_email,
+        nullif(trim(lower({{ extract_gcp_label("labels", "workload_criticality") }})), '') as tag_workload_criticality,
+        nullif(trim(lower({{ extract_gcp_label("labels", "sla_tier") }})), '') as tag_sla_tier,
 
         -- Derived flags
         case

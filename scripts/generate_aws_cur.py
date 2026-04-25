@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from scripts.config import GeneratorConfig, SCENARIOS
+from scripts.config import GeneratorConfig, SCENARIOS, telemetry_profile
 
 # ---------------------------------------------------------------------------
 # Resource catalog — fixed set of "real" resources in the account
@@ -70,6 +70,23 @@ def _sp_arn(account: str) -> str:
 
 def _line_item_id() -> str:
     return uuid.uuid4().hex
+
+
+def _telemetry_fields(res: dict, observed_at: datetime) -> dict[str, str | int | float]:
+    telemetry = telemetry_profile(
+        resource_kind=res["type"],
+        resource_key=str(res["resource_id"]),
+        team=res.get("team"),
+        env=res["env"],
+        observed_at=observed_at,
+    )
+    return {
+        "resourceMetrics/cpuUtilizationPct": telemetry["cpu_util_pct"],
+        "resourceMetrics/memoryUtilizationPct": telemetry["memory_util_pct"],
+        "resourceMetrics/diskUtilizationPct": telemetry["disk_util_pct"],
+        "resourceMetrics/idleHours": telemetry["idle_hours"],
+        "resourceMetrics/lastActivityAt": telemetry["last_activity_at"],
+    }
 
 # ---------------------------------------------------------------------------
 # Build a resource registry once — deterministic "fleet"
@@ -245,6 +262,7 @@ def ec2_row(res: dict, hour_start: datetime, billing_start: str, billing_end: st
         "product/operatingSystem":          "Linux",
         "product/region":                   region,
         "product/servicecode":              "AmazonEC2",
+        **_telemetry_fields(res, hour_start),
         "resourceTags/user:Team":           team_tag,
         "resourceTags/user:Environment":    env_tag,
         "resourceTags/user:CostCenter":     cc_tag,
@@ -344,6 +362,7 @@ def s3_row(res: dict, hour_start: datetime, billing_start: str, billing_end: str
         "product/operatingSystem":          "",
         "product/region":                   region,
         "product/servicecode":              "AmazonS3",
+        **_telemetry_fields(res, hour_start),
         "resourceTags/user:Team":           team_tag,
         "resourceTags/user:Environment":    env_tag,
         "resourceTags/user:CostCenter":     cc_tag,
@@ -406,6 +425,7 @@ def rds_row(res: dict, hour_start: datetime, billing_start: str, billing_end: st
         "product/operatingSystem":          "",
         "product/region":                   region,
         "product/servicecode":              "AmazonRDS",
+        **_telemetry_fields(res, hour_start),
         "resourceTags/user:Team":           team_tag,
         "resourceTags/user:Environment":    env_tag,
         "resourceTags/user:CostCenter":     cc_tag,
@@ -443,6 +463,7 @@ def ri_fee_row(res: dict, billing_start: str, billing_end: str,
     team_tag, env_tag, cc_tag = _tags(res.get("team"), res["env"])
     region_pfx = region.replace("-", "").upper()[:4]
     specs   = INSTANCE_TYPES[itype]
+    observed_at = datetime.strptime(billing_start, "%Y-%m-%dT%H:%M:%SZ")
 
     return {
         "identity/LineItemId":              _line_item_id(),
@@ -477,6 +498,7 @@ def ri_fee_row(res: dict, billing_start: str, billing_end: str,
         "product/operatingSystem":          "Linux",
         "product/region":                   region,
         "product/servicecode":              "AmazonEC2",
+        **_telemetry_fields(res, observed_at),
         "resourceTags/user:Team":           team_tag,
         "resourceTags/user:Environment":    env_tag,
         "resourceTags/user:CostCenter":     cc_tag,
@@ -510,6 +532,7 @@ def sp_recurring_fee_row(res: dict, billing_start: str, billing_end: str,
     team_tag, env_tag, cc_tag = _tags(res.get("team"), res["env"])
     region_pfx = region.replace("-", "").upper()[:4]
     specs   = INSTANCE_TYPES[itype]
+    observed_at = datetime.strptime(billing_start, "%Y-%m-%dT%H:%M:%SZ")
 
     return {
         "identity/LineItemId":              _line_item_id(),
@@ -544,6 +567,7 @@ def sp_recurring_fee_row(res: dict, billing_start: str, billing_end: str,
         "product/operatingSystem":          "Linux",
         "product/region":                   region,
         "product/servicecode":              "AmazonEC2",
+        **_telemetry_fields(res, observed_at),
         "resourceTags/user:Team":           team_tag,
         "resourceTags/user:Environment":    env_tag,
         "resourceTags/user:CostCenter":     cc_tag,
@@ -603,6 +627,11 @@ def _shared_infra_row(res: dict, product_code: str, usage_type: str, operation: 
         "product/operatingSystem":          "",
         "product/region":                   res["region"],
         "product/servicecode":              product_code,
+        "resourceMetrics/cpuUtilizationPct": "",
+        "resourceMetrics/memoryUtilizationPct": "",
+        "resourceMetrics/diskUtilizationPct": "",
+        "resourceMetrics/idleHours": "",
+        "resourceMetrics/lastActivityAt": "",
         # No team tags — these are shared infra, deliberately untagged
         "resourceTags/user:Team":           "",
         "resourceTags/user:Environment":    "",

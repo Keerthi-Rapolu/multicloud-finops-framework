@@ -60,6 +60,113 @@ def _safe_str(value) -> str | None:
     return str(value)
 
 
+def _safe_bool(value) -> bool | None:
+    """Return None for pandas NA / NaN, else bool(value)."""
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return bool(value)
+
+
+def _safe_float(value) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    return float(value)
+
+
+def _safe_timestamp(value) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _metric_or_default(value, default: float) -> float:
+    metric = _safe_float(value)
+    return default if metric is None else metric
+
+
+_OPTIONAL_METADATA_COLS = [
+    "is_tagged",
+    "environment",
+    "cost_center",
+    "business_unit",
+    "application",
+    "owner_email",
+    "workload_criticality",
+    "sla_tier",
+    "cpu_util_pct",
+    "memory_util_pct",
+    "disk_util_pct",
+    "idle_hours",
+    "last_activity_at",
+]
+
+
+def _optional_agg(df: pd.DataFrame) -> dict[str, tuple[str, str]]:
+    agg: dict[str, tuple[str, str]] = {}
+    for col in _OPTIONAL_METADATA_COLS:
+        if col not in df.columns:
+            continue
+        if col in {"cpu_util_pct", "memory_util_pct", "disk_util_pct"}:
+            agg[col] = (col, "mean")
+        elif col in {"idle_hours", "last_activity_at"}:
+            agg[col] = (col, "max")
+        else:
+            agg[col] = (col, "first")
+    return agg
+
+
+def _metadata_payload(row: pd.Series | dict) -> dict:
+    payload: dict = {}
+    for col in _OPTIONAL_METADATA_COLS:
+        if col not in row:
+            continue
+        if col == "is_tagged":
+            value = _safe_bool(row[col])
+        elif col in {"cpu_util_pct", "memory_util_pct", "disk_util_pct", "idle_hours"}:
+            value = _safe_float(row[col])
+        elif col == "last_activity_at":
+            value = _safe_timestamp(row[col])
+        else:
+            value = _safe_str(row[col])
+        if value is not None:
+            payload[col] = value
+    return payload
+
+
+def _stale_days(reference_value, activity_value) -> float | None:
+    if reference_value is None or pd.isna(reference_value) or activity_value is None or pd.isna(activity_value):
+        return None
+    reference_ts = pd.Timestamp(reference_value)
+    activity_ts = pd.Timestamp(activity_value)
+    delta = reference_ts - activity_ts
+    return max(delta.total_seconds() / 86400.0, 0.0)
+
+
+def _telemetry_present(row: pd.Series | dict) -> bool:
+    return any(
+        _safe_float(row.get(col)) is not None
+        for col in ("cpu_util_pct", "memory_util_pct", "disk_util_pct", "idle_hours")
+    ) or _safe_timestamp(row.get("last_activity_at")) is not None
+
+
+def _telemetry_evidence(row: pd.Series | dict, stale_days: float | None) -> dict:
+    evidence: dict[str, float | str] = {}
+    for key in ("cpu_util_pct", "memory_util_pct", "disk_util_pct", "idle_hours"):
+        value = _safe_float(row.get(key))
+        if value is not None:
+            evidence[key] = round(value, 2)
+    if stale_days is not None:
+        evidence["stale_days_since_activity"] = round(stale_days, 2)
+    last_activity = _safe_timestamp(row.get("last_activity_at"))
+    if last_activity is not None:
+        evidence["last_activity_at"] = last_activity
+    return evidence
+
+
 def _required_columns(df: pd.DataFrame, cols: list[str]) -> None:
     missing = [c for c in cols if c not in df.columns]
     if missing:
@@ -126,6 +233,7 @@ def detect_unused_commitments(
             discount_type=("discount_type", "first"),
             nec_waste=("nec_waste", "sum"),
             nec_used=("nec_used", "sum"),
+            **_optional_agg(subset),
         )
         .reset_index()
     )
@@ -151,6 +259,7 @@ def detect_unused_commitments(
                 "discount_type": str(row["discount_type"]),
                 "threshold": min_dollars,
             },
+            **_metadata_payload(row),
         ))
     return findings
 
@@ -178,11 +287,11 @@ def detect_idle_compute(
     """
     _required_columns(df, ["service_category", "vcpu", "nec_used",
                             "usage_amount", "resource_id", "cloud_provider",
-                            "allocated_team", "billing_month"])
+                            "allocated_team", "billing_month", "usage_date"])
 
     threshold = thresholds["idle_compute"]["nec_per_vcpu_hour_threshold"]
     min_dollars = thresholds["min_waste_dollars"]
-    confidence = thresholds["confidence"]["idle_compute"]
+    base_confidence = thresholds["confidence"]["idle_compute"]
 
     compute = df[
         (df["service_category"] == "Compute")
@@ -199,11 +308,9 @@ def detect_idle_compute(
         compute["vcpu"] * compute["usage_amount"]
     )
 
-    idle = compute[compute["_cost_per_vcpu_hour"] < threshold]
-
     # Aggregate per resource + month — a single resource may have many hourly rows.
     agg = (
-        idle.groupby(["resource_id", "billing_month"], dropna=False)
+        compute.groupby(["resource_id", "billing_month"], dropna=False)
         .agg(
             cloud_provider=("cloud_provider", "first"),
             allocated_team=("allocated_team", "first"),
@@ -212,9 +319,34 @@ def detect_idle_compute(
             nec_used=("nec_used", "sum"),
             nec_waste=("nec_waste", "sum"),
             avg_cost_per_vcpu_hour=("_cost_per_vcpu_hour", "mean"),
+            latest_usage_date=("usage_date", "max"),
+            **_optional_agg(compute),
         )
         .reset_index()
     )
+
+    agg["_stale_days_since_activity"] = agg.apply(
+        lambda row: _stale_days(row["latest_usage_date"], row.get("last_activity_at")),
+        axis=1,
+    )
+    agg["_telemetry_backed"] = agg.apply(
+        lambda row: (
+            _telemetry_present(row)
+            and (
+                _metric_or_default(row.get("cpu_util_pct"), 101.0) <= 20.0
+                or _metric_or_default(row.get("memory_util_pct"), 101.0) <= 25.0
+                or _metric_or_default(row.get("disk_util_pct"), 101.0) <= 20.0
+            )
+            and (
+                _metric_or_default(row.get("idle_hours"), 0.0) >= 72.0
+                or _metric_or_default(row["_stale_days_since_activity"], 0.0) >= 7.0
+            )
+        ),
+        axis=1,
+    )
+    agg = agg[
+        (agg["avg_cost_per_vcpu_hour"] < threshold) | agg["_telemetry_backed"]
+    ]
 
     # Apply min_dollars floor on the monthly aggregate, not on individual rows.
     # A resource paying $0.001/hr across 1000 hours = $1 total is still meaningful.
@@ -222,6 +354,16 @@ def detect_idle_compute(
 
     findings: list[WasteFinding] = []
     for _, row in agg.iterrows():
+        confidence = min(
+            0.98,
+            base_confidence + (0.12 if bool(row["_telemetry_backed"]) else 0.0),
+        )
+        evidence = {
+            "avg_cost_per_vcpu_hour": round(float(row["avg_cost_per_vcpu_hour"]), 6),
+            "threshold": threshold,
+            "signal_source": "telemetry+billing" if bool(row["_telemetry_backed"]) else "billing_proxy",
+        }
+        evidence.update(_telemetry_evidence(row, row["_stale_days_since_activity"]))
         findings.append(WasteFinding(
             resource_id=str(row["resource_id"]) if row["resource_id"] else "unknown",
             cloud_provider=str(row["cloud_provider"]),
@@ -233,10 +375,8 @@ def detect_idle_compute(
             nec_used=float(row["nec_used"]),
             confidence=confidence,
             billing_month=str(row["billing_month"]),
-            evidence={
-                "avg_cost_per_vcpu_hour": round(float(row["avg_cost_per_vcpu_hour"]), 6),
-                "threshold": threshold,
-            },
+            evidence=evidence,
+            **_metadata_payload(row),
         ))
     return findings
 
@@ -262,11 +402,12 @@ def detect_zombie_resources(
     false-positives on commitment-only records.
     """
     _required_columns(df, ["resource_id", "billing_month", "nec_used", "nec_waste",
-                            "cloud_provider", "allocated_team", "service_category"])
+                            "cloud_provider", "allocated_team", "service_category",
+                            "usage_date"])
 
     floor = thresholds["zombie_resource"]["monthly_nec_threshold"]
     min_dollars = thresholds["min_waste_dollars"]
-    confidence = thresholds["confidence"]["zombie_resource"]
+    base_confidence = thresholds["confidence"]["zombie_resource"]
 
     # Exclude rows that are pure commitment-fee records (nec_used=0)
     active = df[df["nec_used"] > 0].copy()
@@ -280,19 +421,57 @@ def detect_zombie_resources(
             instance_type=("instance_type", "first"),
             monthly_nec_used=("nec_used", "sum"),
             nec_waste=("nec_waste", "sum"),
+            latest_usage_date=("usage_date", "max"),
+            **_optional_agg(active),
         )
         .reset_index()
     )
 
-    # Flag resources with positive but very low monthly spend
+    agg["_stale_days_since_activity"] = agg.apply(
+        lambda row: _stale_days(row["latest_usage_date"], row.get("last_activity_at")),
+        axis=1,
+    )
+    agg["_telemetry_present"] = agg.apply(_telemetry_present, axis=1)
+    agg["_telemetry_backed"] = agg.apply(
+        lambda row: (
+            bool(row["_telemetry_present"])
+            and (_metric_or_default(row.get("cpu_util_pct"), 101.0) <= 5.0)
+            and (_metric_or_default(row.get("memory_util_pct"), 101.0) <= 12.0)
+            and (_metric_or_default(row.get("disk_util_pct"), 101.0) <= 12.0)
+            and (
+                _metric_or_default(row.get("idle_hours"), 0.0) >= 240.0
+                or _metric_or_default(row["_stale_days_since_activity"], 0.0) >= 14.0
+            )
+        ),
+        axis=1,
+    )
+
+    # When telemetry exists, require inactivity evidence before recommending deletion.
+    # Older datasets without telemetry keep the original low-spend fallback.
     zombies = agg[
         (agg["monthly_nec_used"] > 0)
-        & (agg["monthly_nec_used"] < floor)
-        & (agg["monthly_nec_used"] >= min_dollars)  # ignore sub-$1 noise
+        & (agg["monthly_nec_used"] >= min_dollars)
+        & (
+            agg["_telemetry_backed"]
+            | (
+                ~agg["_telemetry_present"]
+                & (agg["monthly_nec_used"] < floor)
+            )
+        )
     ]
 
     findings: list[WasteFinding] = []
     for _, row in zombies.iterrows():
+        confidence = min(
+            0.97,
+            base_confidence + (0.12 if bool(row["_telemetry_backed"]) else -0.08),
+        )
+        evidence = {
+            "monthly_nec_used": round(float(row["monthly_nec_used"]), 4),
+            "threshold": floor,
+            "signal_source": "telemetry" if bool(row["_telemetry_backed"]) else "cost_only_fallback",
+        }
+        evidence.update(_telemetry_evidence(row, row["_stale_days_since_activity"]))
         findings.append(WasteFinding(
             resource_id=str(row["resource_id"]) if row["resource_id"] else "unknown",
             cloud_provider=str(row["cloud_provider"]),
@@ -304,10 +483,8 @@ def detect_zombie_resources(
             nec_used=float(row["monthly_nec_used"]),
             confidence=confidence,
             billing_month=str(row["billing_month"]),
-            evidence={
-                "monthly_nec_used": round(float(row["monthly_nec_used"]), 4),
-                "threshold": floor,
-            },
+            evidence=evidence,
+            **_metadata_payload(row),
         ))
     return findings
 
@@ -352,6 +529,7 @@ def detect_underutilized_commitments(
             discount_type=("discount_type", "first"),
             total_nec_used=("nec_used", "sum"),
             total_nec_waste=("nec_waste", "sum"),
+            **_optional_agg(committed),
         )
         .reset_index()
     )
@@ -384,6 +562,7 @@ def detect_underutilized_commitments(
                 "threshold": used_threshold,
                 "discount_type": str(row["discount_type"]),
             },
+            **_metadata_payload(row),
         ))
     return findings
 

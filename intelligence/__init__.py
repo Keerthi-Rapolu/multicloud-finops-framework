@@ -1,20 +1,15 @@
 """
-Cost Intelligence Layer — shared type contracts.
+Cost Intelligence Layer shared type contracts.
 
-These TypedDicts are the agreed interface between modules:
-  - WasteFinding   : output of waste_detector, input to causal_engine + impact_simulator
-  - CausalInsight  : output of causal_engine, consumed by dashboard page 07
-  - Recommendation : output of impact_simulator, consumed by dashboard page 08
-
-All three modules must produce / consume exactly these shapes.
+These TypedDicts are the interface between:
+  - waste_detector
+  - causal_engine
+  - impact_simulator
+  - dashboard pages that render their outputs
 """
 
-from typing import TypedDict, Literal, NotRequired
+from typing import Literal, NotRequired, TypedDict
 
-
-# ---------------------------------------------------------------------------
-# Waste type and action literals
-# ---------------------------------------------------------------------------
 
 WasteType = Literal[
     "unused_commitment",
@@ -30,79 +25,91 @@ ActionType = Literal[
 ]
 
 RiskLevel = Literal["Low", "Medium", "High"]
-
-
-# ---------------------------------------------------------------------------
-# WasteFinding
-# Output of:  intelligence/waste_detector.py :: run()
-# Input to:   intelligence/causal_engine.py  :: run()
-#             intelligence/impact_simulator.py :: run()
-# ---------------------------------------------------------------------------
-
-class WasteFinding(TypedDict):
-    resource_id:      str        # from fct_unified_billing.resource_id
-    cloud_provider:   str        # 'aws' | 'azure' | 'gcp'
-    allocated_team:   str        # from fct_unified_billing.allocated_team (nullable → 'unattributed')
-    service_category: str        # 'Compute' | 'Storage' | 'Database' | 'Analytics' | 'Platform' | 'Other'
-    instance_type:    str | None # EC2/GCE instance type — null for non-compute rows
-    waste_type:       WasteType
-    nec_waste:        float      # dollar amount of identified waste
-    nec_used:         float      # actual used cost for context / ratio calculations
-    confidence:       float      # 0.0 – 1.0
-    billing_month:    str        # 'YYYY-MM'
-    evidence:         dict       # supporting data (thresholds hit, ratios computed)
-
-
-# ---------------------------------------------------------------------------
-# RootCause
-# Embedded inside CausalInsight.root_causes
-# ---------------------------------------------------------------------------
-
-class RootCause(TypedDict):
-    cause:    str    # human-readable label, e.g. "commitment_waste_increased"
-    evidence: str    # one-sentence supporting detail
-    weight:   float  # 0.0 – 1.0, relative contribution to the overall explanation
-
-
-# ---------------------------------------------------------------------------
-# CausalInsight
-# Output of:  intelligence/causal_engine.py :: run()
-# Input to:   dashboard/pages/07_cost_insights.py
-# ---------------------------------------------------------------------------
-
-class CausalInsight(TypedDict):
-    scope:            str              # 'team:<name>' | 'cloud:<provider>' | 'service:<category>'
-    period:           str              # 'YYYY-MM' of the period being explained
-    cost_change_pct:  float            # +18.0 = 18% increase vs prior period; negative = decrease
-    root_causes:      list[RootCause]  # ordered by weight DESC, max 3
-    confidence:       float            # 0.0 – 1.0, weighted average of root_cause weights
-    anomaly:          bool             # True if abs(z_score) > 2.0
-
-
-# ---------------------------------------------------------------------------
-# Recommendation
-# Output of:  intelligence/impact_simulator.py :: run()
-# Input to:   dashboard/pages/08_recommendations.py
-# ---------------------------------------------------------------------------
-
 EffortLevel = Literal["Low", "Medium", "High"]
 TimeToRealize = Literal["Immediate", "1 week", "1 month"]
+ActionSafety = Literal["auto_safe", "approval_required", "manual_review", "blocked"]
+LifecycleStatus = Literal["recommended", "approved", "rejected", "implemented", "verified"]
+
+
+class WasteFinding(TypedDict):
+    resource_id: str
+    cloud_provider: str
+    allocated_team: str
+    service_category: str
+    instance_type: str | None
+    waste_type: WasteType
+    nec_waste: float
+    nec_used: float
+    confidence: float
+    billing_month: str
+    evidence: dict
+    is_tagged: NotRequired[bool]
+    environment: NotRequired[str]
+    cost_center: NotRequired[str]
+    business_unit: NotRequired[str]
+    application: NotRequired[str]
+    owner_email: NotRequired[str]
+    workload_criticality: NotRequired[str]
+    sla_tier: NotRequired[str]
+    cpu_util_pct: NotRequired[float]
+    memory_util_pct: NotRequired[float]
+    disk_util_pct: NotRequired[float]
+    idle_hours: NotRequired[float]
+    last_activity_at: NotRequired[str]
+
+
+class RootCause(TypedDict):
+    cause: str
+    evidence: str
+    weight: float
+
+
+class CausalInsight(TypedDict):
+    scope: str
+    period: str
+    cost_change_pct: float
+    root_causes: list[RootCause]
+    confidence: float
+    anomaly: bool
 
 
 class Recommendation(TypedDict):
-    resource_id:        str            # resource the action applies to
-    allocated_team:     str            # team responsible
-    action:             ActionType
-    current_cost:       float          # nec_used + nec_waste for this resource/month
-    estimated_savings:  float          # projected monthly savings if action is taken
-    savings_pct:        float          # estimated_savings / current_cost * 100
-    risk:               RiskLevel
-    priority_score:     float          # savings_pct * confidence — used for ranking
-    rationale:          str            # structured markdown with action justification
-    effort:             EffortLevel    # "Low" = 1-click, "Medium" = needs approval, "High" = migration
-    time_to_realize:    TimeToRealize  # when savings start appearing in billing
-    roi_score:          float          # annual savings / effort_hours — higher = better bang per effort
-    cloud_provider:     NotRequired[str]        # passthrough for drill-down filters
-    waste_type:         NotRequired[WasteType]  # maps recommendation back to source finding
-    billing_month:      NotRequired[str]        # source billing period
-    confidence:         NotRequired[float]      # source finding confidence for UI explanations
+    recommendation_id: str
+    resource_id: str
+    allocated_team: str
+    action: ActionType
+    current_cost: float
+    estimated_savings: float
+    savings_pct: float
+    risk: RiskLevel
+    priority_score: float
+    rationale: str
+    effort: EffortLevel
+    time_to_realize: TimeToRealize
+    roi_score: float
+    risk_score: int
+    risk_reason: str
+    approval_required: bool
+    action_safety: ActionSafety
+    confidence_reason: str
+    evidence_summary: str
+    cloud_provider: NotRequired[str]
+    waste_type: NotRequired[WasteType]
+    billing_month: NotRequired[str]
+    confidence: NotRequired[float]
+    environment: NotRequired[str]
+    cost_center: NotRequired[str]
+    business_unit: NotRequired[str]
+    application: NotRequired[str]
+    owner_email: NotRequired[str]
+    workload_criticality: NotRequired[str]
+    sla_tier: NotRequired[str]
+    cpu_util_pct: NotRequired[float]
+    memory_util_pct: NotRequired[float]
+    disk_util_pct: NotRequired[float]
+    idle_hours: NotRequired[float]
+    last_activity_at: NotRequired[str]
+    action_status: NotRequired[LifecycleStatus]
+    created_date: NotRequired[str]
+    implementation_date: NotRequired[str | None]
+    realized_savings: NotRequired[float]

@@ -19,6 +19,7 @@ from allocation.nec_model import (
     nec_by_team,
 )
 from allocation.shared_cost import SharedCostDistributor
+from dashboard._shared import load_scoped_df
 
 _CONFIG = Path(__file__).resolve().parents[2] / "config" / "shared_cost_weights.yml"
 
@@ -35,10 +36,7 @@ st.set_page_config(page_title="Cost Allocation", layout="wide")
 st.title("Cost Allocation")
 st.caption("Who is spending what, and how is shared infrastructure charged back to teams?")
 
-df = st.session_state.get("df")
-if df is None:
-    st.warning("Return to the home page first to load data.")
-    st.stop()
+df, _, _ = load_scoped_df(render_sidebar=True)
 
 # ---------------------------------------------------------------------------
 # Team NEC summary

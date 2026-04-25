@@ -207,7 +207,7 @@ def stage_land(billing_month: str) -> dict[str, int]:
                 except PermissionError:
                     logger.warning("  %s: skipped locked file %s — will be overwritten", cloud, f.name)
 
-        result = ingest_fn()
+        result = ingest_fn(billing_month=billing_month)
         rows   = sum(result.values())
         row_counts[cloud] = rows
         logger.info("  %s: landed %d rows -> %s", cloud, rows, month_dir)

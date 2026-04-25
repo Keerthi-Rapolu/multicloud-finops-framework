@@ -42,6 +42,11 @@ staged as (
 
         -- vCPUs from AdditionalInfo JSON (VMs only; null for storage/SQL/shared)
         try_cast(nullif(trim(json_extract_string(AdditionalInfo, '$.vCPUs')), '') as integer) as vcpus,
+        try_cast(nullif(trim(json_extract_string(AdditionalInfo, '$.cpuUtilPct')), '') as double) as cpu_util_pct,
+        try_cast(nullif(trim(json_extract_string(AdditionalInfo, '$.memoryUtilPct')), '') as double) as memory_util_pct,
+        try_cast(nullif(trim(json_extract_string(AdditionalInfo, '$.diskUtilPct')), '') as double) as disk_util_pct,
+        try_cast(nullif(trim(json_extract_string(AdditionalInfo, '$.idleHours')), '') as double) as idle_hours,
+        try_strptime(json_extract_string(AdditionalInfo, '$.lastActivityAt'), '%Y-%m-%dT%H:%M:%SZ') as last_activity_at,
 
         -- Usage
         try_cast(Quantity   as double)                                          as usage_amount,
@@ -84,6 +89,11 @@ staged as (
         nullif(trim(lower(json_extract_string(Tags, '$.team'))),        '')     as tag_team,
         nullif(trim(lower(json_extract_string(Tags, '$.environment'))), '')     as tag_environment,
         nullif(trim(lower(json_extract_string(Tags, '$.costcenter'))),  '')     as tag_cost_center,
+        nullif(trim(lower(json_extract_string(Tags, '$.business_unit'))), '')   as tag_business_unit,
+        nullif(trim(lower(json_extract_string(Tags, '$.application'))), '')     as tag_application,
+        nullif(trim(lower(json_extract_string(Tags, '$.owner_email'))), '')     as tag_owner_email,
+        nullif(trim(lower(json_extract_string(Tags, '$.workload_criticality'))), '') as tag_workload_criticality,
+        nullif(trim(lower(json_extract_string(Tags, '$.sla_tier'))), '')        as tag_sla_tier,
 
         -- Derived flags
         case

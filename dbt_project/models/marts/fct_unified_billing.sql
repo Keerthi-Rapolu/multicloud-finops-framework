@@ -1,57 +1,54 @@
 /*
-  fct_unified_billing — Cloud-Agnostic Schema (CAS) unified billing fact table
+  fct_unified_billing
 
-  UNION ALL of AWS + Azure + GCP intermediate NEC models.
-  One row per billable line item, with a consistent column set across clouds.
-
-  Key columns:
-    billing_account_id   — payer account (AWS) / EA billing account (Azure) / billing account (GCP)
-    nec                  — Net Effective Cost (used cost only; excludes waste)
-    nec_waste            — Unused RI/SP commitment cost (Azure only today)
-    list_cost            — Pre-discount / gross cost
-    effective_unit_price — nec / usage_amount; true per-unit cost after discounts
-    vcpu                 — vCPU count (EC2, Azure VMs, GCE only; null for storage/DB)
-    memory_gb            — Memory in GiB (EC2 and GCE only; null for Azure/storage/DB)
-    service_category     — Normalized: Compute | Storage | Database | Analytics | Platform | Other
-    allocated_team       — team charged after shared-cost spreading (Azure)
-    is_shared_cost       — true when cost was split across multiple teams (Azure)
-    is_commitment_waste  — true for UnusedReservation / UnusedSavingsPlan rows
-    discount_type        — ri | sp | on_demand
+  Cloud-agnostic billing fact table with:
+    - NEC / waste measures
+    - shared-cost allocation fields
+    - normalized service_category
+    - workload metadata used by the dashboard decision engine
 */
 
 with aws as (
     select
         cloud_provider,
-        payer_account_id                as billing_account_id,
+        payer_account_id as billing_account_id,
         billing_month,
         account_id,
-        cast(null as varchar)           as account_name,
-        usage_start_time                as usage_date,
+        cast(null as varchar) as account_name,
+        usage_start_time as usage_date,
         resource_id,
         service_name,
         product_name,
         instance_type,
         region,
+        cpu_util_pct,
+        memory_util_pct,
+        disk_util_pct,
+        idle_hours,
+        last_activity_at,
         usage_amount,
-        pricing_unit                    as usage_unit,
-        'USD'                           as currency,
-        on_demand_cost                  as list_cost,
+        pricing_unit as usage_unit,
+        'USD' as currency,
+        on_demand_cost as list_cost,
         nec,
         nec_used,
         nec_waste,
-        -- AWS does not compute effective_unit_price in the intermediate layer
-        cast(null as double)            as effective_unit_price,
+        cast(null as double) as effective_unit_price,
         discount_type,
-        -- Compute sizing (EC2 only; null for S3/RDS rows)
-        try_cast(vcpu as integer)                                            as vcpu,
-        try_cast(regexp_extract(memory, '(\d+)', 1) as integer)             as memory_gb,
+        try_cast(vcpu as integer) as vcpu,
+        try_cast(regexp_extract(memory, '(\d+)', 1) as integer) as memory_gb,
         tag_team,
         tag_environment,
         tag_cost_center,
+        cast(null as varchar) as tag_business_unit,
+        cast(null as varchar) as tag_application,
+        cast(null as varchar) as tag_owner_email,
+        cast(null as varchar) as tag_workload_criticality,
+        cast(null as varchar) as tag_sla_tier,
         is_tagged,
-        tag_team                        as allocated_team,
-        nec                             as allocated_nec,
-        false                           as is_shared_cost,
+        tag_team as allocated_team,
+        nec as allocated_nec,
+        false as is_shared_cost,
         is_commitment_waste
     from {{ ref('int_aws_nec') }}
 ),
@@ -63,29 +60,36 @@ azure as (
         billing_month,
         account_id,
         account_name,
-        cast(usage_date as timestamp)   as usage_date,
+        cast(usage_date as timestamp) as usage_date,
         resource_id,
         service_name,
         product_name,
-        cast(null as varchar)           as instance_type,
+        cast(null as varchar) as instance_type,
         region,
+        cpu_util_pct,
+        memory_util_pct,
+        disk_util_pct,
+        idle_hours,
+        last_activity_at,
         usage_amount,
         usage_unit,
         currency,
-        -- retail_cost = payg_price × usage_amount = true OD baseline (consistent with AWS/GCP)
-        -- billed_cost = CostInBillingCurrency (amortized actual cost) — used for NEC
-        retail_cost                     as list_cost,
+        retail_cost as list_cost,
         nec,
         nec_used,
         nec_waste,
         effective_unit_price,
         discount_type,
-        -- Compute sizing (VMs only; null for storage/SQL rows)
-        vcpus                           as vcpu,
-        cast(null as integer)           as memory_gb,
+        vcpus as vcpu,
+        cast(null as integer) as memory_gb,
         tag_team,
         tag_environment,
         tag_cost_center,
+        tag_business_unit,
+        tag_application,
+        tag_owner_email,
+        tag_workload_criticality,
+        tag_sla_tier,
         is_tagged,
         allocated_team,
         allocated_nec,
@@ -101,12 +105,17 @@ gcp as (
         billing_month,
         account_id,
         account_name,
-        usage_start_time                as usage_date,
+        usage_start_time as usage_date,
         resource_id,
         service_name,
-        sku_description                 as product_name,
-        cast(null as varchar)           as instance_type,
+        sku_description as product_name,
+        cast(null as varchar) as instance_type,
         region,
+        cpu_util_pct,
+        memory_util_pct,
+        disk_util_pct,
+        idle_hours,
+        last_activity_at,
         usage_amount,
         usage_unit,
         currency,
@@ -114,19 +123,23 @@ gcp as (
         nec,
         nec_used,
         nec_waste,
-        cast(null as double)            as effective_unit_price,
+        cast(null as double) as effective_unit_price,
         discount_type,
-        -- Compute sizing (GCE only; null for Cloud Storage/BigQuery/Cloud SQL rows)
-        compute_cores                   as vcpu,
-        compute_memory_gb               as memory_gb,
+        compute_cores as vcpu,
+        compute_memory_gb as memory_gb,
         tag_team,
         tag_environment,
         tag_cost_center,
+        tag_business_unit,
+        tag_application,
+        tag_owner_email,
+        tag_workload_criticality,
+        tag_sla_tier,
         is_tagged,
-        tag_team                        as allocated_team,
-        nec                             as allocated_nec,
-        false                           as is_shared_cost,
-        is_unused_reservation           as is_commitment_waste
+        tag_team as allocated_team,
+        nec as allocated_nec,
+        false as is_shared_cost,
+        is_unused_reservation as is_commitment_waste
     from {{ ref('int_gcp_nec') }}
 ),
 
@@ -136,50 +149,122 @@ unified as (
     select * from azure
     union all
     select * from gcp
+),
+
+classified as (
+    select
+        *,
+        case
+            when cloud_provider = 'aws' then
+                case
+                    when service_name in ('AmazonEC2', 'AWSLambda', 'AmazonECS', 'AmazonEKS', 'AWSFargate', 'AmazonLightsail') then 'Compute'
+                    when service_name in ('AmazonS3', 'AmazonEFS', 'AmazonGlacier', 'AWSBackup') then 'Storage'
+                    when service_name in ('AmazonRDS', 'AmazonDynamoDB', 'AmazonRedshift', 'AmazonElastiCache', 'AmazonDocDB') then 'Database'
+                    when service_name in ('AWSGlue', 'AmazonAthena', 'AmazonEMR', 'AmazonKinesis', 'AWSDataSync') then 'Analytics'
+                    else 'Other'
+                end
+            when cloud_provider = 'azure' then
+                case
+                    when service_name in ('Virtual Machines', 'Container Instances', 'Azure Kubernetes Service', 'App Service', 'Azure Functions') then 'Compute'
+                    when service_name in ('Storage', 'Azure Blob Storage', 'Azure Files', 'Azure Data Lake Storage') then 'Storage'
+                    when service_name in ('SQL Database', 'Azure Cosmos DB', 'Azure Database for PostgreSQL', 'Azure Cache for Redis', 'Azure SQL Managed Instance') then 'Database'
+                    when service_name in ('Azure Monitor', 'API Management', 'Key Vault', 'Azure Networking', 'Virtual Network', 'Azure Firewall') then 'Platform'
+                    when service_name in ('Azure Synapse Analytics', 'Azure Data Factory', 'Azure Databricks') then 'Analytics'
+                    else 'Other'
+                end
+            when cloud_provider = 'gcp' then
+                case
+                    when service_name = 'Compute Engine' then 'Compute'
+                    when service_name = 'Cloud Storage' then 'Storage'
+                    when service_name = 'Cloud SQL' then 'Database'
+                    when service_name = 'BigQuery' then 'Analytics'
+                    else 'Other'
+                end
+            else 'Other'
+        end as service_category
+    from unified
 )
 
 select
     *,
-    -- Normalized service category — consistent across clouds for cross-cloud dashboards
-    case
-        when cloud_provider = 'aws' then
-            case
-                when service_name in ('AmazonEC2', 'AWSLambda', 'AmazonECS', 'AmazonEKS',
-                                      'AWSFargate', 'AmazonLightsail')              then 'Compute'
-                when service_name in ('AmazonS3', 'AmazonEFS', 'AmazonGlacier',
-                                      'AWSBackup')                                  then 'Storage'
-                when service_name in ('AmazonRDS', 'AmazonDynamoDB', 'AmazonRedshift',
-                                      'AmazonElastiCache', 'AmazonDocDB')           then 'Database'
-                when service_name in ('AWSGlue', 'AmazonAthena', 'AmazonEMR',
-                                      'AmazonKinesis', 'AWSDataSync')               then 'Analytics'
-                else 'Other'
+    coalesce(tag_environment, 'prod') as environment,
+    upper(
+        coalesce(
+            tag_cost_center,
+            case allocated_team
+                when 'platform' then 'CC100'
+                when 'data-eng' then 'CC200'
+                when 'frontend' then 'CC300'
+                when 'backend' then 'CC400'
+                when 'ml' then 'CC500'
+                else 'CC999'
             end
-        when cloud_provider = 'azure' then
-            case
-                when service_name in ('Virtual Machines', 'Container Instances',
-                                      'Azure Kubernetes Service', 'App Service',
-                                      'Azure Functions')                             then 'Compute'
-                when service_name in ('Storage', 'Azure Blob Storage',
-                                      'Azure Files', 'Azure Data Lake Storage')     then 'Storage'
-                when service_name in ('SQL Database', 'Azure Cosmos DB',
-                                      'Azure Database for PostgreSQL',
-                                      'Azure Cache for Redis', 'Azure SQL Managed Instance') then 'Database'
-                when service_name in ('Azure Monitor', 'API Management',
-                                      'Key Vault', 'Azure Networking',
-                                      'Virtual Network', 'Azure Firewall')          then 'Platform'
-                when service_name in ('Azure Synapse Analytics',
-                                      'Azure Data Factory', 'Azure Databricks')     then 'Analytics'
-                else 'Other'
-            end
-        when cloud_provider = 'gcp' then
-            case
-                when service_name = 'Compute Engine'    then 'Compute'
-                when service_name = 'Cloud Storage'     then 'Storage'
-                when service_name = 'Cloud SQL'         then 'Database'
-                when service_name = 'BigQuery'          then 'Analytics'
-                else 'Other'
-            end
-        else 'Other'
-    end                                 as service_category
-
-from unified
+        )
+    ) as cost_center,
+    coalesce(
+        tag_business_unit,
+        case allocated_team
+            when 'platform' then 'engineering'
+            when 'data-eng' then 'data'
+            when 'frontend' then 'product'
+            when 'backend' then 'product'
+            when 'ml' then 'ai'
+            else 'shared-services'
+        end
+    ) as business_unit,
+    coalesce(
+        tag_application,
+        case allocated_team
+            when 'platform' then 'platform-core'
+            when 'data-eng' then 'data-platform'
+            when 'frontend' then 'customer-web'
+            when 'backend' then 'core-api'
+            when 'ml' then 'ml-platform'
+            else 'unassigned'
+        end
+    ) as application,
+    coalesce(
+        tag_owner_email,
+        case allocated_team
+            when 'platform' then 'platform-owner@company.com'
+            when 'data-eng' then 'data-eng-owner@company.com'
+            when 'frontend' then 'frontend-owner@company.com'
+            when 'backend' then 'backend-owner@company.com'
+            when 'ml' then 'ml-owner@company.com'
+            else 'unassigned-owner@company.com'
+        end
+    ) as owner_email,
+    coalesce(
+        tag_workload_criticality,
+        case
+            when coalesce(tag_environment, 'prod') = 'prod' and allocated_team = 'platform' then 'mission_critical'
+            when coalesce(tag_environment, 'prod') = 'prod' then 'high'
+            when coalesce(tag_environment, 'prod') in ('staging', 'test', 'qa', 'nonprod') then 'medium'
+            else 'low'
+        end
+    ) as workload_criticality,
+    coalesce(
+        tag_sla_tier,
+        case
+            when coalesce(
+                tag_workload_criticality,
+                case
+                    when coalesce(tag_environment, 'prod') = 'prod' and allocated_team = 'platform' then 'mission_critical'
+                    when coalesce(tag_environment, 'prod') = 'prod' then 'high'
+                    when coalesce(tag_environment, 'prod') in ('staging', 'test', 'qa', 'nonprod') then 'medium'
+                    else 'low'
+                end
+            ) = 'mission_critical' then 'gold'
+            when coalesce(
+                tag_workload_criticality,
+                case
+                    when coalesce(tag_environment, 'prod') = 'prod' and allocated_team = 'platform' then 'mission_critical'
+                    when coalesce(tag_environment, 'prod') = 'prod' then 'high'
+                    when coalesce(tag_environment, 'prod') in ('staging', 'test', 'qa', 'nonprod') then 'medium'
+                    else 'low'
+                end
+            ) = 'high' then 'silver'
+            else 'bronze'
+        end
+    ) as sla_tier
+from classified

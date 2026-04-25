@@ -47,4 +47,4 @@ testpaths = ["tests"]
 addopts = "-v --tb=short"
 
 [tool.setuptools.packages.find]
-include = ["allocation*", "ingestion*", "scripts*"]
+include = ["allocation*", "ingestion*", "intelligence*", "scripts*"]

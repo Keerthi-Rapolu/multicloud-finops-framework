@@ -11,10 +11,10 @@ import csv
 import json
 import random
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from scripts.config import GeneratorConfig
+from scripts.config import GeneratorConfig, telemetry_profile, workload_metadata
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +107,27 @@ def _resource_id(sub: str, rg: str, provider: str, resource_type: str, name: str
 def _tags_str(team: str | None, env: str) -> str:
     if team is None:
         return "{}"
+    metadata = workload_metadata(team, env)
     return json.dumps({
         "team": team,
         "environment": env,
         "costcenter": COST_CENTERS.get(team, "CC999"),
-        "application": f"{team}-app",
+        "application": metadata["application"],
+        "business_unit": metadata["business_unit"],
+        "owner_email": metadata["owner_email"],
+        "workload_criticality": metadata["workload_criticality"],
+        "sla_tier": metadata["sla_tier"],
     })
+
+
+def _telemetry_info(resource_kind: str, resource_key: str, team: str | None, env: str, observed_at: date) -> dict[str, float | int | str]:
+    return telemetry_profile(
+        resource_kind=resource_kind,
+        resource_key=resource_key,
+        team=team,
+        env=env,
+        observed_at=datetime.combine(observed_at, datetime.min.time()),
+    )
 
 def _vm_row(sku: str, team, env: str, sub: str, rg: str, region: str,
             day: date, vm_name: str, discount: str) -> dict:
@@ -120,6 +135,7 @@ def _vm_row(sku: str, team, env: str, sub: str, rg: str, region: str,
     payg_price  = round(daily_od / 24, 6)
     ri_discount = random.uniform(0.30, 0.45)
     sp_discount = random.uniform(0.20, 0.35)
+    telemetry = _telemetry_info("vm", vm_name, team, env, day)
 
     if discount == "ri":
         amortized     = round(daily_od * (1 - ri_discount) * random.uniform(0.98, 1.02), 6)
@@ -164,7 +180,16 @@ def _vm_row(sku: str, team, env: str, sub: str, rg: str, region: str,
         "ResourceId":               _resource_id(sub, rg, "Microsoft.Compute", "virtualMachines", vm_name),
         "ResourceName":             vm_name,
         "Tags":                     _tags_str(team, env),
-        "AdditionalInfo":           json.dumps({"ServiceType": "Standard", "VMName": vm_name, "vCPUs": vcpus}),
+        "AdditionalInfo":           json.dumps({
+            "ServiceType": "Standard",
+            "VMName": vm_name,
+            "vCPUs": vcpus,
+            "cpuUtilPct": telemetry["cpu_util_pct"],
+            "memoryUtilPct": telemetry["memory_util_pct"],
+            "diskUtilPct": telemetry["disk_util_pct"],
+            "idleHours": telemetry["idle_hours"],
+            "lastActivityAt": telemetry["last_activity_at"],
+        }),
         "ServiceFamily":            "Compute",
         "ChargeType":               "Usage",
         "PublisherType":            "Azure",
@@ -178,6 +203,7 @@ def _storage_row(name: str, team, env: str, sub: str, rg: str, region: str,
     # Azure Blob Storage LRS: ~$0.018/GB-month -> daily
     rate = 0.018 if tier == "LRS" else 0.023
     daily_cost = round((gb * rate / 30) * random.uniform(0.997, 1.003), 6)
+    telemetry = _telemetry_info("storage", name, team, env, day)
 
     return {
         "BillingAccountId":         BILLING_ACCOUNT_ID,
@@ -206,7 +232,14 @@ def _storage_row(name: str, team, env: str, sub: str, rg: str, region: str,
         "ResourceId":               _resource_id(sub, rg, "Microsoft.Storage", "storageAccounts", name),
         "ResourceName":             name,
         "Tags":                     _tags_str(team, env),
-        "AdditionalInfo":           json.dumps({"AccountType": tier}),
+        "AdditionalInfo":           json.dumps({
+            "AccountType": tier,
+            "cpuUtilPct": telemetry["cpu_util_pct"],
+            "memoryUtilPct": telemetry["memory_util_pct"],
+            "diskUtilPct": telemetry["disk_util_pct"],
+            "idleHours": telemetry["idle_hours"],
+            "lastActivityAt": telemetry["last_activity_at"],
+        }),
         "ServiceFamily":            "Storage",
         "ChargeType":               "Usage",
         "PublisherType":            "Azure",
@@ -219,6 +252,7 @@ def _sql_row(sku: str, team, env: str, sub: str, rg: str, region: str,
              daily_cost: float, db_name: str, day: date) -> dict:
     cost = round(daily_cost * random.uniform(0.99, 1.01), 6)
     unit_price = round(daily_cost / 24, 6)
+    telemetry = _telemetry_info("sql", db_name, team, env, day)
     return {
         "BillingAccountId":         BILLING_ACCOUNT_ID,
         "InvoiceSectionName":       SUBSCRIPTIONS[sub],
@@ -246,7 +280,13 @@ def _sql_row(sku: str, team, env: str, sub: str, rg: str, region: str,
         "ResourceId":               _resource_id(sub, rg, "Microsoft.Sql", "servers/databases", db_name),
         "ResourceName":             db_name,
         "Tags":                     _tags_str(team, env),
-        "AdditionalInfo":           "{}",
+        "AdditionalInfo":           json.dumps({
+            "cpuUtilPct": telemetry["cpu_util_pct"],
+            "memoryUtilPct": telemetry["memory_util_pct"],
+            "diskUtilPct": telemetry["disk_util_pct"],
+            "idleHours": telemetry["idle_hours"],
+            "lastActivityAt": telemetry["last_activity_at"],
+        }),
         "ServiceFamily":            "Databases",
         "ChargeType":               "Usage",
         "PublisherType":            "Azure",
@@ -273,6 +313,7 @@ def _unused_commitment_row(team, env: str, sub: str, rg: str, region: str,
     benefit_id  = f"/providers/Microsoft.BillingBenefits/savingsPlanOrders/{uuid.uuid4()}"
 
     pricing_model = "Reservation" if discount == "ri" else "SavingsPlan"
+    telemetry = _telemetry_info("vm", vm_name, team, env, day)
     return {
         "BillingAccountId":         BILLING_ACCOUNT_ID,
         "InvoiceSectionName":       SUBSCRIPTIONS[sub],
@@ -300,7 +341,13 @@ def _unused_commitment_row(team, env: str, sub: str, rg: str, region: str,
         "ResourceId":               "",
         "ResourceName":             vm_name,
         "Tags":                     _tags_str(team, env),
-        "AdditionalInfo":           "{}",
+        "AdditionalInfo":           json.dumps({
+            "cpuUtilPct": telemetry["cpu_util_pct"],
+            "memoryUtilPct": telemetry["memory_util_pct"],
+            "diskUtilPct": telemetry["disk_util_pct"],
+            "idleHours": telemetry["idle_hours"],
+            "lastActivityAt": telemetry["last_activity_at"],
+        }),
         "ServiceFamily":            "Compute",
         "ChargeType":               charge_type,
         "PublisherType":            "Azure",
@@ -315,6 +362,7 @@ def _shared_resource_row(meter_cat: str, product: str, meter_name: str,
     """Shared-infra row — no team tag, cost spread across all teams in dbt."""
     cost     = round(daily_cost * random.uniform(0.99, 1.01), 6)
     res_name = meter_cat.lower().replace(" ", "-")
+    telemetry = _telemetry_info("shared", res_name, None, "prod", day)
     return {
         "BillingAccountId":         BILLING_ACCOUNT_ID,
         "InvoiceSectionName":       SUBSCRIPTIONS[SHARED_INFRA_SUB],
@@ -342,7 +390,13 @@ def _shared_resource_row(meter_cat: str, product: str, meter_name: str,
         "ResourceId":               _resource_id(SHARED_INFRA_SUB, rg, "Microsoft.SharedInfra", meter_cat, res_name),
         "ResourceName":             res_name,
         "Tags":                     "{}",
-        "AdditionalInfo":           "{}",
+        "AdditionalInfo":           json.dumps({
+            "cpuUtilPct": telemetry["cpu_util_pct"],
+            "memoryUtilPct": telemetry["memory_util_pct"],
+            "diskUtilPct": telemetry["disk_util_pct"],
+            "idleHours": telemetry["idle_hours"],
+            "lastActivityAt": telemetry["last_activity_at"],
+        }),
         "ServiceFamily":            service_family,
         "ChargeType":               "Usage",
         "PublisherType":            "Azure",

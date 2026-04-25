@@ -32,10 +32,17 @@ def _billing_month(df: pd.DataFrame) -> str:
     return str(sample)[:7]  # e.g. "2026-03-01" -> "2026-03"
 
 
-def ingest(source_dir: Path = SYNTHETIC, output_dir: Path = RAW_OUTPUT) -> dict:
+def ingest(
+    source_dir: Path = SYNTHETIC,
+    output_dir: Path = RAW_OUTPUT,
+    billing_month: str | None = None,
+) -> dict:
     csv_files = sorted(source_dir.glob("*.csv"))
+    if billing_month:
+        csv_files = [p for p in csv_files if billing_month in p.name]
     if not csv_files:
-        raise FileNotFoundError(f"No CSV files found in {source_dir}")
+        target = f" for {billing_month}" if billing_month else ""
+        raise FileNotFoundError(f"No CSV files found in {source_dir}{target}")
 
     results = {}
 

@@ -1,95 +1,134 @@
 """
 Impact Simulator.
 
-Converts WasteFinding objects from the waste detector into prioritised
-Recommendation dicts, estimating recoverable savings and assigning risk levels.
-
-Design constraints (Phase 2):
-  - Input: list[WasteFinding] from waste_detector.run()
-  - Output: list[Recommendation] sorted by priority_score DESC
-  - No external pricing APIs — savings derived from billing waste signals only
-  - Conservative recovery rates (see RECOVERY_RATES)
-
-Pipeline:
-  action_for_waste_type(waste_type) → ActionType string
-  estimate_savings(finding)         → (estimated_savings, savings_pct)
-  risk_score(finding)               → RiskLevel string
-  build_rationale(finding, action, savings) → str
-  run(waste_findings)               → list[Recommendation]
-
-Entry point: run(waste_findings) → list[Recommendation]
+Converts WasteFinding objects into prioritized recommendations with:
+  - conservative savings estimates
+  - explicit numeric risk scoring
+  - approval / action-safety guardrails
+  - stable recommendation ids for lifecycle tracking
 """
 
 from __future__ import annotations
 
+import hashlib
+
 from intelligence import Recommendation
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 ACTION_MAP: dict[str, str] = {
-    "unused_commitment":        "release_commitment",
-    "idle_compute":             "resize_down",
-    "zombie_resource":          "remove_resource",
+    "unused_commitment": "release_commitment",
+    "idle_compute": "resize_down",
+    "zombie_resource": "remove_resource",
     "underutilized_commitment": "release_commitment",
 }
 
-# Conservative: fraction of the waste signal that is realistically recoverable
 RECOVERY_RATES: dict[str, float] = {
-    "unused_commitment":        1.00,  # 100% — commitment can be fully released
-    "idle_compute":             0.80,  # 80%  — right-sizing saves most but not all
-    "zombie_resource":          1.00,  # 100% — full removal eliminates all spend
-    "underutilized_commitment": 0.60,  # 60%  — partial right-sizing avoids early-exit penalty
+    "unused_commitment": 1.00,
+    "idle_compute": 0.80,
+    "zombie_resource": 1.00,
+    "underutilized_commitment": 0.60,
 }
 
 RISK_MAP: dict[str, str] = {
-    "unused_commitment":        "Low",
-    "idle_compute":             "Medium",
-    "zombie_resource":          "Low",
+    "unused_commitment": "Low",
+    "idle_compute": "Medium",
+    "zombie_resource": "Low",
     "underutilized_commitment": "High",
 }
 
-# Effort to execute: "Low" = 1-click, "Medium" = needs approval + testing, "High" = migration
+BASE_RISK_SCORES: dict[str, int] = {
+    "unused_commitment": 18,
+    "idle_compute": 44,
+    "zombie_resource": 24,
+    "underutilized_commitment": 62,
+}
+
 EFFORT_MAP: dict[str, str] = {
-    "release_commitment": "Low",    # single API call or console click
-    "resize_down":        "Medium", # requires workload testing + team approval
-    "remove_resource":    "Low",    # manual verify + delete
+    "release_commitment": "Low",
+    "resize_down": "Medium",
+    "remove_resource": "Low",
 }
 
-# When savings appear in billing after action taken
 TIME_MAP: dict[str, str] = {
-    "release_commitment": "Immediate",  # next billing cycle (~days)
-    "resize_down":        "1 week",     # test period + resize window
-    "remove_resource":    "Immediate",  # next billing cycle
+    "release_commitment": "Immediate",
+    "resize_down": "1 week",
+    "remove_resource": "Immediate",
 }
 
-# Effort hours per level — used to compute ROI (annual savings / hours of work)
+ENV_RISK_ADJ = {
+    "prod": 18,
+    "nonprod": 8,
+    "staging": 8,
+    "test": 8,
+    "qa": 8,
+    "dev": 0,
+    "sandbox": 0,
+}
+
+CRITICALITY_RISK_ADJ = {
+    "mission_critical": 28,
+    "high": 18,
+    "medium": 8,
+    "low": 0,
+}
+
+SLA_RISK_ADJ = {
+    "gold": 10,
+    "silver": 5,
+    "bronze": 0,
+}
+
+SERVICE_RISK_ADJ = {
+    "Platform": 10,
+    "Database": 8,
+    "Analytics": 6,
+    "Compute": 4,
+    "Storage": 2,
+    "Other": 0,
+}
+
+ACTION_RISK_ADJ = {
+    "release_commitment": -6,
+    "resize_down": 6,
+    "remove_resource": 10,
+}
+
 _EFFORT_HOURS: dict[str, float] = {"Low": 1.0, "Medium": 4.0, "High": 16.0}
+_MIN_SAVINGS = 1.00
 
-_MIN_SAVINGS = 1.00  # recommendations below this dollar threshold are suppressed
+_ACTION_CONTEXT: dict[str, dict[str, list[str] | str]] = {
+    "release_commitment": {
+        "why_points": [
+            "Billing rows show idle RI/SP capacity that can be reduced without resizing a workload",
+            "Commitment recovery is immediate because the savings comes from billing structure, not application code changes",
+        ],
+        "alternative": "keep current commitment coverage and accept the idle spend",
+        "chosen_because": "highest savings with the lowest operational impact",
+    },
+    "resize_down": {
+        "why_points": [
+            "Billing proxy shows very low cost per vCPU hour relative to the provisioned shape",
+            "Right-sizing preserves service while recovering most of the waste",
+        ],
+        "alternative": "remove the instance entirely after deeper workload validation",
+        "chosen_because": "it keeps the workload online while still recovering material savings",
+    },
+    "remove_resource": {
+        "why_points": [
+            "The resource has persistent low monthly NEC and fits the orphan / zombie profile",
+            "Full removal recovers all spend if the asset is truly unused",
+        ],
+        "alternative": "keep the resource running and review it again next cycle",
+        "chosen_because": "there is no partial optimization path that saves more than deletion",
+    },
+}
 
-
-# ---------------------------------------------------------------------------
-# 9A — action_for_waste_type
-# ---------------------------------------------------------------------------
 
 def action_for_waste_type(waste_type: str) -> str:
-    """Map a waste type to the recommended remediation action."""
     return ACTION_MAP[waste_type]
 
 
-# ---------------------------------------------------------------------------
-# 9B — estimate_savings
-# ---------------------------------------------------------------------------
-
 def estimate_savings(finding: dict) -> tuple[float, float]:
-    """
-    Return (estimated_savings, savings_pct) for a WasteFinding.
-
-    For commitment findings the waste signal is in nec_waste; for idle_compute
-    and zombie_resource the cost is in nec_used (nec_waste is 0).
-    """
     base = finding["nec_waste"] if finding["nec_waste"] > 0 else finding["nec_used"]
     rate = RECOVERY_RATES[finding["waste_type"]]
     estimated_savings = base * rate
@@ -98,135 +137,271 @@ def estimate_savings(finding: dict) -> tuple[float, float]:
     return estimated_savings, savings_pct
 
 
-# ---------------------------------------------------------------------------
-# 9C — risk_score
-# ---------------------------------------------------------------------------
+def _risk_level(score: int) -> str:
+    if score >= 70:
+        return "High"
+    if score >= 35:
+        return "Medium"
+    return "Low"
+
+
+def _risk_profile(finding: dict, action: str) -> dict[str, int | str | bool]:
+    waste_type = finding["waste_type"]
+    environment = str(finding.get("environment") or "prod").lower()
+    criticality = str(finding.get("workload_criticality") or "medium").lower()
+    sla_tier = str(finding.get("sla_tier") or "bronze").lower()
+    service_category = str(finding.get("service_category") or "Other")
+    is_tagged = bool(finding.get("is_tagged", True))
+    evidence = finding.get("evidence") or {}
+    telemetry_backed = any(
+        key in evidence
+        for key in (
+            "cpu_util_pct",
+            "memory_util_pct",
+            "disk_util_pct",
+            "idle_hours",
+            "stale_days_since_activity",
+        )
+    )
+
+    score = BASE_RISK_SCORES[waste_type]
+    score += ENV_RISK_ADJ.get(environment, 4)
+    score += CRITICALITY_RISK_ADJ.get(criticality, 8)
+    score += SLA_RISK_ADJ.get(sla_tier, 0)
+    score += SERVICE_RISK_ADJ.get(service_category, 0)
+    score += ACTION_RISK_ADJ.get(action, 0)
+    if not is_tagged or str(finding.get("allocated_team")) == "unattributed":
+        score += 6
+    if action in {"resize_down", "remove_resource"} and not telemetry_backed:
+        score += 12
+    elif action in {"resize_down", "remove_resource"} and telemetry_backed:
+        score -= 8
+    score = max(0, min(100, round(score)))
+
+    risk = _risk_level(score)
+    approval_required = (
+        score >= 45
+        or environment == "prod"
+        or criticality in {"high", "mission_critical"}
+        or not is_tagged
+    )
+
+    if (
+        criticality == "mission_critical"
+        and action in {"resize_down", "remove_resource"}
+    ) or (environment == "prod" and action == "remove_resource") or score >= 85:
+        action_safety = "blocked"
+    elif action == "remove_resource" and not telemetry_backed:
+        action_safety = "manual_review"
+    elif score >= 65 or (action == "remove_resource" and environment in {"staging", "nonprod", "test", "qa"}):
+        action_safety = "manual_review"
+    elif approval_required:
+        action_safety = "approval_required"
+    else:
+        action_safety = "auto_safe"
+
+    reasons: list[str] = [f"{waste_type.replace('_', ' ')} detected from billing data"]
+    if environment == "prod":
+        reasons.append("workload runs in production")
+    if criticality in {"high", "mission_critical"}:
+        reasons.append(f"criticality is {criticality.replace('_', ' ')}")
+    if sla_tier == "gold":
+        reasons.append("gold SLA coverage increases change sensitivity")
+    if not is_tagged or str(finding.get("allocated_team")) == "unattributed":
+        reasons.append("ownership/tagging is incomplete, so action needs extra validation")
+    if action == "remove_resource":
+        reasons.append("deletion is harder to reverse than billing-only commitment changes")
+    elif action == "resize_down":
+        reasons.append("right-sizing changes live capacity and should be validated against workload demand")
+    else:
+        reasons.append("commitment optimization is primarily a billing action with lower service risk")
+    if telemetry_backed:
+        reasons.append("telemetry shows persistently low utilization or stale activity")
+    elif action in {"resize_down", "remove_resource"}:
+        reasons.append("telemetry is missing, so optimization stays conservative")
+
+    return {
+        "risk_score": score,
+        "risk": risk,
+        "risk_reason": "; ".join(reasons[:4]).capitalize(),
+        "approval_required": approval_required,
+        "action_safety": action_safety,
+    }
+
 
 def risk_score(finding: dict) -> str:
-    """Return 'Low', 'Medium', or 'High' risk level for a WasteFinding."""
-    return RISK_MAP[finding["waste_type"]]
+    action = action_for_waste_type(finding["waste_type"])
+    return str(_risk_profile(finding, action)["risk"])
 
 
-# ---------------------------------------------------------------------------
-# 9D — build_rationale
-# ---------------------------------------------------------------------------
+def _confidence_reason(finding: dict) -> str:
+    waste_type = finding["waste_type"]
+    confidence = float(finding.get("confidence", 0.0))
+    evidence = finding.get("evidence") or {}
+    telemetry_backed = any(
+        key in evidence
+        for key in (
+            "cpu_util_pct",
+            "memory_util_pct",
+            "disk_util_pct",
+            "idle_hours",
+            "stale_days_since_activity",
+        )
+    )
+    if waste_type == "unused_commitment":
+        reason = "Billing export explicitly marks unused commitment cost, so this is a direct signal."
+    elif waste_type == "underutilized_commitment":
+        reason = "Confidence comes from the used-vs-wasted commitment ratio computed from billing data."
+    elif waste_type == "idle_compute":
+        if telemetry_backed:
+            reason = "Confidence is higher because low host utilization and inactivity telemetry support the billing signal."
+        else:
+            reason = "Confidence is moderate because idle compute is inferred from a billing proxy, not host telemetry."
+    else:
+        if telemetry_backed:
+            reason = "Confidence is high because the resource shows stale activity and near-zero utilization."
+        else:
+            reason = "Confidence is based on persistently low monthly NEC; deletion should be validated before action."
 
-_ACTION_CONTEXT: dict[str, dict] = {
-    "release_commitment": {
-        "why_points": [
-            "Commitment utilisation is below the recoverable threshold",
-            "No workload growth trend detected in billing signals",
-        ],
-        "alternative": "resize (lower savings, risk of early-exit penalty)",
-        "chosen_because": "highest savings, lowest operational risk — no service interruption",
-    },
-    "resize_down": {
-        "why_points": [
-            "Cost-per-vCPU-hour is below the idle compute threshold",
-            "Instance is over-provisioned relative to workload billing signals",
-        ],
-        "alternative": "remove (higher risk — may have intermittent usage)",
-        "chosen_because": "maintains service availability while recovering ~80% of waste",
-    },
-    "remove_resource": {
-        "why_points": [
-            "Total spend is below $2/month — classified as zombie resource",
-            "No usage value justifies continued provisioning cost",
-        ],
-        "alternative": "none — spend is too low to benefit from partial optimisation",
-        "chosen_because": "full elimination recovers 100% of waste, zero service dependency",
-    },
-}
+    if not bool(finding.get("is_tagged", True)):
+        reason += " Team attribution is weaker because the source row is not explicitly tagged."
+
+    return f"{reason} Current confidence: {confidence:.0%}."
+
+
+def _evidence_summary(finding: dict) -> str:
+    evidence = finding.get("evidence") or {}
+    waste_type = finding["waste_type"].replace("_", " ")
+    if not evidence:
+        return f"{waste_type.title()} was identified from billing structure."
+
+    ordered = []
+    for key, value in evidence.items():
+        label = key.replace("_", " ")
+        if isinstance(value, float):
+            if "util" in key or "days" in key:
+                ordered.append(f"{label}={value:.2f}")
+            elif "threshold" in key or "fraction" in key or "hour" in key:
+                ordered.append(f"{label}={value:.4f}")
+            else:
+                ordered.append(f"{label}=${value:,.2f}")
+        else:
+            ordered.append(f"{label}={value}")
+    return f"{waste_type.title()} evidence: " + ", ".join(ordered[:4])
 
 
 def build_rationale(finding: dict, action: str, savings: float) -> str:
-    """Construct a structured rationale with action justification and alternatives."""
-    resource  = finding["resource_id"]
-    svc       = finding["service_category"]
-    cloud     = finding["cloud_provider"].upper()
-    team      = finding["allocated_team"]
-    wtype     = finding["waste_type"].replace("_", " ")
-    action_lbl = action.replace("_", " ").title()
+    resource = finding["resource_id"]
+    service = finding["service_category"]
+    cloud = finding["cloud_provider"].upper()
+    team = finding["allocated_team"]
+    waste_type = finding["waste_type"].replace("_", " ")
+    action_label = action.replace("_", " ").title()
 
     ctx = _ACTION_CONTEXT.get(action, {})
-    why_lines = "\n".join(f"  - {pt}" for pt in ctx.get("why_points", []))
-    alt       = ctx.get("alternative", "—")
-    chosen    = ctx.get("chosen_because", "best savings-to-risk ratio")
+    why_lines = "\n".join(f"  - {point}" for point in ctx.get("why_points", []))
+    alt = str(ctx.get("alternative", "review manually"))
+    chosen = str(ctx.get("chosen_because", "best savings-to-risk ratio"))
+    short_id = ("..." + resource[-48:]) if len(resource) > 50 else resource
 
-    short_id = ("…" + resource[-48:]) if len(resource) > 50 else resource
     return (
-        f"**{cloud} · {svc} · Team: {team}**  \n"
+        f"**{cloud} | {service} | Team: {team}**  \n"
         f"Resource: `{short_id}`  \n"
-        f"Waste detected: {wtype}  \n\n"
-        f"**Why {action_lbl}:**\n{why_lines}\n"
+        f"Waste detected: {waste_type}  \n\n"
+        f"**Why {action_label}:**\n{why_lines}\n"
         f"  - Alternative: {alt}\n\n"
         f"**Chosen because:** {chosen}  \n\n"
         f"**Estimated savings:** ${savings:,.2f}/month"
     )
 
 
-# ---------------------------------------------------------------------------
-# 9E — run  (entry point)
-# ---------------------------------------------------------------------------
+def _recommendation_id(finding: dict, action: str) -> str:
+    raw = "|".join(
+        [
+            str(finding.get("billing_month", "")),
+            str(finding.get("cloud_provider", "")),
+            str(finding.get("resource_id", "")),
+            str(finding.get("waste_type", "")),
+            action,
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
 
 def run(waste_findings: list[dict]) -> list[Recommendation]:
-    """
-    Convert waste findings into prioritised Recommendation dicts.
-
-    Parameters
-    ----------
-    waste_findings : output of intelligence.waste_detector.run(df)
-
-    Returns
-    -------
-    list[Recommendation] sorted by priority_score descending so the
-    highest-impact, highest-confidence actions appear first.
-    """
     recs: list[Recommendation] = []
 
-    for f in waste_findings:
-        estimated_savings, savings_pct = estimate_savings(f)
+    for finding in waste_findings:
+        estimated_savings, savings_pct = estimate_savings(finding)
         if estimated_savings < _MIN_SAVINGS:
             continue
 
-        action = action_for_waste_type(f["waste_type"])
-        current_cost = f["nec_used"] + f["nec_waste"]
-
+        action = action_for_waste_type(finding["waste_type"])
+        current_cost = finding["nec_used"] + finding["nec_waste"]
         effort = EFFORT_MAP.get(action, "Medium")
         time_to_realize = TIME_MAP.get(action, "1 week")
-        effort_hours = _EFFORT_HOURS[effort]
-        roi_score = round((estimated_savings * 12) / effort_hours, 2)
+        roi_score = round((estimated_savings * 12) / _EFFORT_HOURS[effort], 2)
+        profile = _risk_profile(finding, action)
 
-        recs.append(Recommendation(
-            resource_id=f["resource_id"],
-            allocated_team=f["allocated_team"],
+        rec = Recommendation(
+            recommendation_id=_recommendation_id(finding, action),
+            resource_id=finding["resource_id"],
+            allocated_team=finding["allocated_team"],
             action=action,
             current_cost=round(current_cost, 4),
             estimated_savings=round(estimated_savings, 4),
             savings_pct=round(savings_pct, 2),
-            risk=risk_score(f),
-            priority_score=round(savings_pct * f["confidence"], 4),
-            rationale=build_rationale(f, action, estimated_savings),
+            risk=str(profile["risk"]),
+            priority_score=round(savings_pct * finding["confidence"], 4),
+            rationale=build_rationale(finding, action, estimated_savings),
             effort=effort,
             time_to_realize=time_to_realize,
             roi_score=roi_score,
-            cloud_provider=f["cloud_provider"],
-            waste_type=f["waste_type"],
-            billing_month=f["billing_month"],
-            confidence=round(f["confidence"], 4),
-        ))
+            risk_score=int(profile["risk_score"]),
+            risk_reason=str(profile["risk_reason"]),
+            approval_required=bool(profile["approval_required"]),
+            action_safety=str(profile["action_safety"]),
+            confidence_reason=_confidence_reason(finding),
+            evidence_summary=_evidence_summary(finding),
+            cloud_provider=finding["cloud_provider"],
+            waste_type=finding["waste_type"],
+            billing_month=finding["billing_month"],
+            confidence=round(float(finding.get("confidence", 0.0)), 4),
+        )
 
-    return sorted(recs, key=lambda r: r["priority_score"], reverse=True)
+        for key in (
+            "environment",
+            "cost_center",
+            "business_unit",
+            "application",
+            "owner_email",
+            "workload_criticality",
+            "sla_tier",
+            "cpu_util_pct",
+            "memory_util_pct",
+            "disk_util_pct",
+            "idle_hours",
+            "last_activity_at",
+        ):
+            value = finding.get(key)
+            if value is not None:
+                rec[key] = value
 
+        recs.append(rec)
 
-# ---------------------------------------------------------------------------
-# CLI — python -m intelligence.impact_simulator
-# ---------------------------------------------------------------------------
+    return sorted(
+        recs,
+        key=lambda rec: (rec["priority_score"], rec["estimated_savings"]),
+        reverse=True,
+    )
+
 
 if __name__ == "__main__":
     import argparse
     from pathlib import Path
+
     import duckdb
+
     from intelligence.waste_detector import run as detect_waste
 
     parser = argparse.ArgumentParser(description="Run impact simulator against DuckDB mart.")
@@ -246,16 +421,20 @@ if __name__ == "__main__":
     con.close()
 
     findings = detect_waste(df)
-    recs     = run(findings)
+    recommendations = run(findings)
+    total_savings = sum(rec["estimated_savings"] for rec in recommendations)
 
-    total_savings = sum(r["estimated_savings"] for r in recs)
-    print(f"\nRecommendations: {len(recs)}  |  Total estimated savings: ${total_savings:,.2f}\n")
-    for i, r in enumerate(recs[:10], 1):
+    print(
+        f"\nRecommendations: {len(recommendations)}"
+        f"  |  Total estimated savings: ${total_savings:,.2f}\n"
+    )
+    for index, rec in enumerate(recommendations[:10], 1):
         print(
-            f"  {i:2d}. [{r['risk']:6s}] {r['action']:20s}  "
-            f"save ${r['estimated_savings']:7,.2f}  "
-            f"({r['savings_pct']:5.1f}%)  "
-            f"priority={r['priority_score']:.1f}  "
-            f"team={r['allocated_team']}"
+            f"  {index:2d}. [{rec['risk']:6s}] {rec['action']:20s} "
+            f"save ${rec['estimated_savings']:7,.2f} "
+            f"({rec['savings_pct']:5.1f}%) "
+            f"priority={rec['priority_score']:.1f} "
+            f"team={rec['allocated_team']} "
+            f"safety={rec['action_safety']}"
         )
     print()

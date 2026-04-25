@@ -443,6 +443,36 @@ The Streamlit dashboard has a home page plus 5 detail pages — run with `make d
 
 > GitHub README does not support embedded interactive content. To try the live dashboard, run `make demo` locally or deploy the `dashboard/` folder to [Streamlit Community Cloud](https://streamlit.io/cloud) for free.
 
+### Example Action Workflow
+
+The dashboard is designed to support one clear FinOps workflow end to end:
+
+1. **Find the problem** — the Home page and Insights page surface the dominant issue: unattributed spend, commitment waste, or abnormal cost movement.
+2. **Understand why it happened** — Waste & Recommendations and Cost Intelligence show evidence, confidence, risk, and the likely operational cause.
+3. **Assign ownership** — Tagging & Attribution identifies gaps and allows owner assignment where direct attribution is missing.
+4. **Choose a safe action** — recommendations carry `risk_score`, `risk_reason`, `approval_required`, and `action_safety`.
+5. **Track the outcome** — the recommendation lifecycle records `recommended -> approved -> implemented -> verified`, with expected and realized savings for demo tracking.
+
+### Demo Story
+
+For a short walkthrough, use this sequence:
+
+1. Open **Home** to show portfolio NEC, waste, unattributed spend, and the maturity score.
+2. Open **Cost Intelligence** to show the top 3 actions for the week plus the month-end forecast.
+3. Open **Waste & Recommendations** to show the action table, approval posture, and lifecycle state.
+4. Open **Tagging & Attribution** to show ownership gaps and how unattributed spend can be reduced.
+5. Return to **Cost Intelligence** and export the executive markdown summary or Jira-ready action list.
+
+### Suggested Screenshots
+
+If you are preparing a demo or submission, these are the most useful screenshots to capture:
+
+- Home page executive summary and maturity score
+- Cost Intelligence forecast outlook and weekly action panel
+- Waste & Recommendations prioritised action list with lifecycle state
+- Tagging & Attribution owner assignment / SLA view
+- Before-vs-after impact section showing projected savings
+
 ---
 
 ## Scope and Limitations

@@ -13,7 +13,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from scripts.config import GeneratorConfig
+from scripts.config import GeneratorConfig, telemetry_profile, workload_metadata
 
 
 BILLING_ACCOUNT = "ABCDEF-123456-ABCDEF"
@@ -100,10 +100,16 @@ COST_CENTERS = {"platform": "cc100", "data-eng": "cc200", "frontend": "cc300",
 def _labels(team: str | None, env: str) -> str:
     if team is None:
         return "[]"
+    metadata = workload_metadata(team, env)
     return json.dumps([
         {"key": "team",        "value": team},
         {"key": "environment", "value": env},
         {"key": "cost_center", "value": COST_CENTERS.get(team, "cc999")},
+        {"key": "application", "value": metadata["application"]},
+        {"key": "business_unit", "value": metadata["business_unit"]},
+        {"key": "owner_email", "value": metadata["owner_email"]},
+        {"key": "workload_criticality", "value": metadata["workload_criticality"]},
+        {"key": "sla_tier", "value": metadata["sla_tier"]},
     ])
 
 def _cud_credits(cost: float) -> str:
@@ -177,6 +183,34 @@ def _gce_system_labels(machine: str) -> str:
     ])
 
 
+def _telemetry_system_labels(
+    resource_kind: str,
+    resource_key: str,
+    team: str | None,
+    env: str,
+    observed_at: datetime,
+    extra_labels: list[dict[str, str]] | None = None,
+) -> str:
+    telemetry = telemetry_profile(
+        resource_kind=resource_kind,
+        resource_key=resource_key,
+        team=team,
+        env=env,
+        observed_at=observed_at,
+    )
+    labels = list(extra_labels or [])
+    labels.extend(
+        [
+            {"key": "cpu_util_pct", "value": f"{telemetry['cpu_util_pct']}"},
+            {"key": "memory_util_pct", "value": f"{telemetry['memory_util_pct']}"},
+            {"key": "disk_util_pct", "value": f"{telemetry['disk_util_pct']}"},
+            {"key": "idle_hours", "value": str(telemetry["idle_hours"])},
+            {"key": "last_activity_at", "value": str(telemetry["last_activity_at"])},
+        ]
+    )
+    return json.dumps(labels)
+
+
 def gce_row(project: str, region: str, zone_sfx: str, machine: str,
             hourly_od: float, team, env: str,
             hour_start: datetime, credit_type: str | None) -> dict:
@@ -191,6 +225,14 @@ def gce_row(project: str, region: str, zone_sfx: str, machine: str,
         credits = "[]"
 
     vm_name = f"vm-{machine.replace('-', '')}-{zone_sfx}"
+    telemetry_labels = _telemetry_system_labels(
+        "gce_vm",
+        f"{project}:{vm_name}",
+        team,
+        env,
+        hour_start,
+        extra_labels=json.loads(_gce_system_labels(machine)),
+    )
     return _base(
         project, "6F81-5844-456A", "Compute Engine",
         _sku_id(), f"{machine} running in {region}",
@@ -198,7 +240,7 @@ def gce_row(project: str, region: str, zone_sfx: str, machine: str,
         f"projects/{project}/zones/{zone}/instances/{vm_name}",
         f"//compute.googleapis.com/projects/{project}/zones/{zone}/instances/{vm_name}",
         cost, 1.0, "hour", credits, team, env,
-        system_labels=_gce_system_labels(machine),
+        system_labels=telemetry_labels,
     )
 
 
@@ -216,6 +258,7 @@ def gcs_row(project: str, region: str, bucket: str, team, env: str,
         daily_cost,
         round(gb * random.uniform(0.9998, 1.0002), 4),
         "gibibyte month", "[]", team, env,
+        system_labels=_telemetry_system_labels("gcs", f"{project}:{bucket}", team, env, day_start),
     )
 
 
@@ -233,6 +276,7 @@ def bq_analysis_row(project: str, region: str, dataset: str, team, env: str,
         f"projects/{project}/datasets/{dataset}",
         f"//bigquery.googleapis.com/projects/{project}/datasets/{dataset}",
         cost, tb_this_hour, "tebibyte", "[]", team, env,
+        system_labels=_telemetry_system_labels("bigquery", f"{project}:{dataset}:analysis", team, env, hour_start),
     )
 
 
@@ -249,6 +293,7 @@ def bq_storage_row(project: str, region: str, dataset: str, team, env: str,
         daily_cost,
         round(tb_storage * 1024, 4),
         "gibibyte month", "[]", team, env,
+        system_labels=_telemetry_system_labels("bigquery", f"{project}:{dataset}:storage", team, env, day_start),
     )
 
 
@@ -262,6 +307,7 @@ def sql_row(project: str, region: str, instance: str, team, env: str,
         f"projects/{project}/instances/{instance}",
         f"//sqladmin.googleapis.com/projects/{project}/instances/{instance}",
         cost, 1.0, "hour", "[]", team, env,
+        system_labels=_telemetry_system_labels("cloud_sql", f"{project}:{instance}", team, env, hour_start),
     )
 
 

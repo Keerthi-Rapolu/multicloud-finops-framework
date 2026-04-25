@@ -49,6 +49,11 @@ nec as (
         operating_system,
         region,
         availability_zone,
+        cpu_util_pct,
+        memory_util_pct,
+        disk_util_pct,
+        idle_hours,
+        last_activity_at,
         usage_amount,
         pricing_unit,
 

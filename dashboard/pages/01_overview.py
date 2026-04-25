@@ -22,7 +22,10 @@ from dashboard._shared import (
     CLOUD_COLORS,
     COLOR_BLOCKER,
     COLOR_OPTIMIZED,
+    LABEL_NEC,
+    LABEL_WASTE_PCT,
     diagnose,
+    load_scoped_df,
     render_headline,
 )
 
@@ -30,10 +33,7 @@ st.set_page_config(page_title="Overview", layout="wide")
 st.title("Overview")
 st.caption("What is happening with cloud spend right now?")
 
-df = st.session_state.get("df")
-if df is None:
-    st.warning("Return to the home page first to load data.")
-    st.stop()
+df, _, _ = load_scoped_df(render_sidebar=True)
 
 # ---------------------------------------------------------------------------
 # Executive headline (Critical #1)
@@ -50,15 +50,17 @@ by_cloud = nec_by_cloud(df)
 total_list  = by_cloud["list_cost"].sum()
 total_nec   = by_cloud["nec"].sum()
 total_waste = by_cloud["nec_waste"].sum()
+total_savings = total_list - total_nec
+savings_pct = total_savings / total_list * 100 if total_list else 0
 waste_pct   = total_waste / total_nec * 100 if total_nec else 0
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Total List Cost",    f"${total_list:,.2f}")
-c2.metric("Net Effective Cost", f"${total_nec:,.2f}")
-c3.metric("Savings (vs List Cost)", f"${total_list - total_nec:,.2f}",
-          delta=f"{(total_list - total_nec) / total_list * 100:.1f}%")
+c2.metric(LABEL_NEC,            f"${total_nec:,.2f}")
+c3.metric("Savings (vs List Cost)", f"${total_savings:,.2f}",
+          delta=f"{savings_pct:.1f}%")
 c4.metric("Commitment Waste",   f"${total_waste:,.2f}")
-c5.metric("Waste %",            f"{waste_pct:.1f}%", delta_color="inverse",
+c5.metric(LABEL_WASTE_PCT,      f"{waste_pct:.1f}%", delta_color="inverse",
           delta=f"{waste_pct:.1f}% of NEC wasted")
 
 # Alert if waste is material

@@ -12,6 +12,8 @@ Provides:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -38,11 +40,19 @@ TEAM_LABELS = {
     "unattributed": "Unattributed",
 }
 
+GLOBAL_CLOUD_OPTIONS = ["All", "aws", "azure", "gcp"]
+
+LABEL_NEC = "Net Effective Cost (NEC)"
+LABEL_WASTE_PCT = "Waste as % of NEC"
+LABEL_ESTIMATED_MONTHLY_SAVINGS = "Estimated Monthly Savings"
+LABEL_UNATTRIBUTED_SPEND = "Unattributed Spend"
+
 # ---------------------------------------------------------------------------
 # Data loading — deep-link safe
 # ---------------------------------------------------------------------------
 
 _DB_PATH = Path(__file__).resolve().parents[1] / "finops_dbt.duckdb"
+_RECOMMENDATION_ACTIONS_PATH = Path(__file__).resolve().parents[1] / "data" / "recommendation_actions.json"
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -65,9 +75,167 @@ def load_df(month: str | None) -> pd.DataFrame:
     return load_billing_data(_DB_PATH, billing_month=month or None)
 
 
+def _resolve_scope_defaults(months: list[str]) -> tuple[str, str]:
+    selected_month = st.session_state.get("billing_month")
+    if selected_month not in (["All"] + months):
+        legacy_month = st.session_state.get("month")
+        selected_month = legacy_month if legacy_month in months else months[0]
+
+    selected_cloud = st.session_state.get("cloud", "All")
+    if selected_cloud not in GLOBAL_CLOUD_OPTIONS:
+        selected_cloud = "All"
+
+    return selected_month, selected_cloud
+
+
+def render_global_scope_sidebar(show_title: bool = False) -> tuple[str | None, str]:
+    months = available_months()
+    if not months:
+        st.error(
+            "**No data found.** Run `make pipeline` first to generate synthetic data "
+            "and build the DuckDB mart, then relaunch the dashboard."
+        )
+        st.stop()
+
+    selected_month, selected_cloud = _resolve_scope_defaults(months)
+
+    if show_title:
+        st.sidebar.title("FinOps Dashboard")
+        st.sidebar.markdown("---")
+
+    st.sidebar.markdown("### Global scope")
+    st.sidebar.caption(
+        "Applies to every page. Page-level filters below narrow this scope."
+    )
+
+    month_options = ["All"] + months
+    st.session_state.setdefault("billing_month", selected_month)
+    st.session_state.setdefault("cloud", selected_cloud)
+    selected_month = st.sidebar.selectbox(
+        "Billing month",
+        month_options,
+        index=month_options.index(selected_month),
+        key="billing_month",
+    )
+    selected_cloud = st.sidebar.selectbox(
+        "Cloud provider",
+        GLOBAL_CLOUD_OPTIONS,
+        index=GLOBAL_CLOUD_OPTIONS.index(selected_cloud),
+        key="cloud",
+    )
+
+    month_filter = None if selected_month == "All" else selected_month
+    st.session_state["month"] = month_filter
+    return month_filter, selected_cloud
+
+
+def load_scoped_df(
+    *,
+    render_sidebar: bool = False,
+    show_sidebar_title: bool = False,
+) -> tuple[pd.DataFrame, str | None, str]:
+    months = available_months()
+    if not months:
+        st.error(
+            "**No data found.** Run `make pipeline` first to generate synthetic data "
+            "and build the DuckDB mart, then relaunch the dashboard."
+        )
+        st.stop()
+
+    if render_sidebar:
+        month_filter, selected_cloud = render_global_scope_sidebar(
+            show_title=show_sidebar_title
+        )
+    else:
+        selected_month, selected_cloud = _resolve_scope_defaults(months)
+        month_filter = None if selected_month == "All" else selected_month
+        st.session_state.setdefault("billing_month", selected_month)
+        st.session_state["month"] = month_filter
+        st.session_state.setdefault("cloud", selected_cloud)
+
+    df_full = load_df(month_filter)
+    scoped_df = (
+        df_full
+        if selected_cloud == "All"
+        else df_full[df_full["cloud_provider"] == selected_cloud].copy()
+    )
+    st.session_state["df"] = scoped_df
+    return scoped_df, month_filter, selected_cloud
+
+
 def content_hash(df: pd.DataFrame) -> int:
     """Stable cache key — unlike id(df) this hits when data is unchanged."""
     return int(pd.util.hash_pandas_object(df, index=True).sum())
+
+
+def apply_owner_assignments(
+    df: pd.DataFrame,
+    assigned_map: dict[str, str],
+    fallback_by_account: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """Fill unattributed rows from saved cloud/account owner assignments."""
+    base_team = (
+        df["allocated_team"].fillna("unattributed")
+        if "allocated_team" in df.columns
+        else pd.Series("unattributed", index=df.index)
+    ).astype(str)
+
+    if "cloud_provider" not in df.columns or "account_id" not in df.columns:
+        return df.assign(effective_team=base_team, is_manually_assigned=False)
+
+    keys = (
+        df["cloud_provider"].astype(str).str.lower()
+        + "::"
+        + df["account_id"].astype(str)
+    )
+    assigned_team = keys.map(assigned_map)
+    if fallback_by_account:
+        assigned_team = assigned_team.fillna(df["account_id"].astype(str).map(fallback_by_account))
+
+    manual_mask = base_team.eq("unattributed") & assigned_team.notna()
+    effective_team = base_team.mask(manual_mask, assigned_team)
+    return df.assign(effective_team=effective_team, is_manually_assigned=manual_mask)
+
+
+def load_recommendation_actions() -> dict[str, dict]:
+    """Load locally persisted recommendation lifecycle state."""
+    if not _RECOMMENDATION_ACTIONS_PATH.exists():
+        return {}
+    with open(_RECOMMENDATION_ACTIONS_PATH, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def save_recommendation_action(recommendation_id: str, payload: dict) -> None:
+    """Persist lifecycle state for one recommendation."""
+    actions = load_recommendation_actions()
+    actions[recommendation_id] = payload
+    _RECOMMENDATION_ACTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_RECOMMENDATION_ACTIONS_PATH, "w", encoding="utf-8") as handle:
+        json.dump(actions, handle, indent=2, sort_keys=True)
+
+
+def overlay_recommendation_actions(recommendations: list[dict]) -> list[dict]:
+    """Merge persisted lifecycle state into recommendations with safe defaults."""
+    actions = load_recommendation_actions()
+    merged: list[dict] = []
+    today = date.today().isoformat()
+    for rec in recommendations:
+        rid = rec["recommendation_id"]
+        saved = actions.get(rid, {})
+        merged.append(
+            {
+                **rec,
+                "action_status": saved.get("action_status", "recommended"),
+                "created_date": saved.get("created_date", today),
+                "implementation_date": saved.get("implementation_date"),
+                "realized_savings": float(saved.get("realized_savings", 0.0) or 0.0),
+                "action_owner": saved.get(
+                    "action_owner",
+                    rec.get("owner_email") or TEAM_LABELS.get(rec.get("allocated_team", ""), rec.get("allocated_team", "Unassigned")),
+                ),
+            }
+        )
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -245,14 +413,20 @@ def render_priority_badge(priority: Priority, label: str | None = None) -> str:
 @dataclass
 class MaturityScore:
     overall:      float
-    tag_score:    float
-    tag_level:    str
-    waste_score:  float
-    waste_level:  str
-    nec_score:    float
-    nec_level:    str
+    tagging_score: float
+    tagging_level: str
+    ownership_score: float
+    ownership_level: str
+    allocation_score: float
+    allocation_level: str
+    commitment_score: float
+    commitment_level: str
     detect_score: float
     detect_level: str
+    forecasting_score: float
+    forecasting_level: str
+    automation_score: float
+    automation_level: str
     guidance:     str   # "To reach 4+/5, do X, Y"
 
 
@@ -278,64 +452,116 @@ def _level_from_score(score: float) -> str:
     return "Missing"
 
 
-def compute_maturity(df: pd.DataFrame, diag: Diagnostic) -> MaturityScore:
-    tag_score,   tag_level   = _score_tagging(diag.untagged_pct)
-    waste_score, waste_level = _score_commitment(diag.waste_pct)
+def compute_maturity(
+    df: pd.DataFrame,
+    diag: Diagnostic,
+    recommendations: list[dict] | None = None,
+) -> MaturityScore:
+    recommendations = recommendations or []
 
-    # NEC modeling — data consistency of the NEC equation
-    if diag.total_nec > 0:
-        nec_used_sum  = df["nec_used"].fillna(0).sum()  if "nec_used"  in df.columns else 0.0
-        nec_waste_sum = df["nec_waste"].fillna(0).sum() if "nec_waste" in df.columns else 0.0
-        invariant_err = abs(diag.total_nec - (nec_used_sum + nec_waste_sum))
-        consistency   = max(0.0, 1.0 - invariant_err / diag.total_nec)
-        nec_score     = round(5.0 * consistency, 1)
+    tagging_score, tagging_level = _score_tagging(diag.untagged_pct)
+    commitment_score, commitment_level = _score_commitment(diag.waste_pct)
+
+    owner_series = df.get("owner_email", pd.Series(dtype=object)).fillna("").astype(str).str.lower()
+    owner_coverage = (
+        ((owner_series != "") & ~owner_series.str.contains("unassigned")).mean()
+        if len(owner_series)
+        else 0.0
+    )
+    ownership_score = round(owner_coverage * 5.0, 1)
+
+    attributed_ratio = (1.0 - diag.untagged_pct / 100.0) if diag.total_nec > 0 else 0.0
+    shared_signal = 1.0 if "is_shared_cost" in df.columns and df["is_shared_cost"].notna().any() else 0.5
+    allocation_score = round(max(0.0, min(5.0, 5.0 * (0.8 * attributed_ratio + 0.2 * shared_signal))), 1)
+
+    has_commitments = df["discount_type"].isin(["ri", "sp"]).any() if "discount_type" in df.columns else False
+    has_waste_signal = (df["nec_waste"].fillna(0) > 0).any() if "nec_waste" in df.columns else False
+    has_usage_data = df["nec_used"].notna().any() if "nec_used" in df.columns else False
+    has_recommendations = bool(recommendations)
+    detect_score = round(
+        5.0 * (
+            sum([bool(has_commitments), bool(has_waste_signal), bool(has_usage_data), has_recommendations]) / 4
+        ),
+        1,
+    )
+
+    n_months = df["billing_month"].nunique() if "billing_month" in df.columns else 0
+    if n_months >= 3:
+        forecasting_score = 5.0
+    elif n_months == 2:
+        forecasting_score = 3.0
+    elif n_months == 1:
+        forecasting_score = 1.5
     else:
-        nec_score = 0.0
+        forecasting_score = 0.0
 
-    # Waste detection — signal coverage
-    has_commitments  = df["discount_type"].isin(["ri", "sp"]).any() if "discount_type" in df.columns else False
-    has_waste_signal = (df["nec_waste"].fillna(0) > 0).any()        if "nec_waste"     in df.columns else False
-    has_usage_data   = df["nec_used"].notna().any()                 if "nec_used"      in df.columns else False
-    signals          = sum([bool(has_commitments), bool(has_waste_signal), bool(has_usage_data)])
-    detect_score     = round(5.0 * (signals / 3), 1)
+    if recommendations:
+        total = len(recommendations)
+        auto_safe = sum(1 for rec in recommendations if rec.get("action_safety") == "auto_safe")
+        approval = sum(1 for rec in recommendations if rec.get("action_safety") == "approval_required")
+        blocked = sum(1 for rec in recommendations if rec.get("action_safety") == "blocked")
+        automation_ratio = (auto_safe + 0.5 * approval) / total if total else 0.0
+        automation_penalty = 0.5 if total and blocked / total > 0.3 else 0.0
+        automation_score = round(max(0.0, min(5.0, 5.0 * automation_ratio - automation_penalty)), 1)
+    else:
+        automation_score = 0.0
 
-    overall = round((tag_score + waste_score + nec_score + detect_score) / 4, 1)
+    dimension_scores = [
+        tagging_score,
+        ownership_score,
+        allocation_score,
+        commitment_score,
+        detect_score,
+        forecasting_score,
+        automation_score,
+    ]
+    overall = round(sum(dimension_scores) / len(dimension_scores), 1) if dimension_scores else 0.0
 
-    # Build improvement guidance (Medium #10)
     gaps: list[str] = []
-    if tag_score < 4.0:
+    if tagging_score < 4.0:
         gaps.append(
-            f"reduce untagged NEC from {diag.untagged_pct:.0f}% → <10% "
-            "(enforce `tag_team` at resource creation)"
+            f"reduce unattributed spend from {diag.untagged_pct:.0f}% to below 10% with enforced `tag_team` policy"
         )
-    if waste_score < 4.0:
+    if ownership_score < 4.0:
+        gaps.append("close owner coverage gaps for unassigned workloads and action owners")
+    if allocation_score < 4.0:
+        gaps.append("improve attribution and shared-cost allocation consistency across clouds")
+    if commitment_score < 4.0:
         gaps.append(
-            f"reduce commitment waste from {diag.waste_pct:.1f}% → <5% "
-            "(right-size or release idle RI/SP)"
+            f"reduce commitment waste from {diag.waste_pct:.1f}% to below 5% through release/right-sizing"
         )
-    if nec_score < 4.0:
-        gaps.append("harden NEC equation consistency in the mart layer")
     if detect_score < 4.0:
-        gaps.append("add commitment + usage signals to the billing pipeline")
+        gaps.append("broaden waste-detection signal coverage and keep recommendations flowing from the same mart")
+    if forecasting_score < 4.0:
+        gaps.append("retain at least 3 months of billing history for stable forecasting")
+    if automation_score < 4.0:
+        gaps.append("increase the share of auto-safe or pre-approved optimization actions")
 
     if not gaps:
         guidance = (
-            "All four dimensions are at **Implemented** — maintain current discipline "
+            "All seven dimensions are at **Implemented** - maintain current operating discipline "
             "and monitor drift month-over-month."
         )
     else:
         target = 5.0 if overall >= 4.0 else 4.0
-        guidance = (
-            f"**To reach {target:.1f}/5**, in priority order:\n\n- "
-            + "\n- ".join(gaps)
-        )
+        guidance = f"**To reach {target:.1f}/5**, in priority order:\n\n- " + "\n- ".join(gaps)
 
     return MaturityScore(
         overall=overall,
-        tag_score=tag_score,     tag_level=tag_level,
-        waste_score=waste_score, waste_level=waste_level,
-        nec_score=nec_score,     nec_level=_level_from_score(nec_score),
-        detect_score=detect_score, detect_level=_level_from_score(detect_score),
+        tagging_score=tagging_score,
+        tagging_level=tagging_level,
+        ownership_score=ownership_score,
+        ownership_level=_level_from_score(ownership_score),
+        allocation_score=allocation_score,
+        allocation_level=_level_from_score(allocation_score),
+        commitment_score=commitment_score,
+        commitment_level=commitment_level,
+        detect_score=detect_score,
+        detect_level=_level_from_score(detect_score),
+        forecasting_score=forecasting_score,
+        forecasting_level=_level_from_score(forecasting_score),
+        automation_score=automation_score,
+        automation_level=_level_from_score(automation_score),
         guidance=guidance,
     )
 
@@ -350,46 +576,62 @@ ACTION_OPS: dict[str, dict[str, str]] = {
         "owner":      "Cloud Platform / FinOps",
         "automation": "Approval-required",
         "sla":        "This week",
-        "automation_badge": "⚠ Requires approval",
+        "automation_badge": "Requires approval",
     },
     "resize_down": {
         "owner":      "Team owning the workload",
         "automation": "Automatable",
         "sla":        "Next cycle",
-        "automation_badge": "✔ Fully automatable",
+        "automation_badge": "Auto-safe",
     },
     "remove_resource": {
         "owner":      "Team owning the workload",
         "automation": "Manual verification",
         "sla":        "Immediate",
-        "automation_badge": "⚠ Manual verification",
+        "automation_badge": "Manual review",
     },
 }
 
 
 def enrich_recommendation(rec: dict) -> dict:
-    """Attach Owner / Automation / SLA metadata to a recommendation."""
+    """Attach owner, automation, and SLA metadata to a recommendation."""
     ops = ACTION_OPS.get(
         rec.get("action", ""),
-        {"owner": "Unassigned", "automation": "Manual",
-         "sla": "This week", "automation_badge": "⚠ Manual verification"},
+        {
+            "owner": "Unassigned",
+            "automation": "Manual review",
+            "sla": "This week",
+            "automation_badge": "Manual review",
+        },
     )
     team = rec.get("allocated_team", "unattributed")
     team_lbl = TEAM_LABELS.get(team, team.replace("-", " ").title())
-    # Override owner with the team if the action is team-local
     owner = team_lbl if ops["owner"].startswith("Team owning") else ops["owner"]
 
-    # SLA escalation for very high confidence + high savings
+    action_safety = rec.get("action_safety")
+    if action_safety == "blocked":
+        automation = "Blocked"
+        automation_badge = "Blocked"
+    elif action_safety == "manual_review":
+        automation = "Manual review"
+        automation_badge = "Manual review"
+    elif action_safety == "approval_required" or rec.get("approval_required"):
+        automation = "Approval-required"
+        automation_badge = "Requires approval"
+    else:
+        automation = ops["automation"]
+        automation_badge = ops["automation_badge"]
+
     sla = ops["sla"]
-    if rec.get("risk") == "Low" and rec.get("estimated_savings", 0) >= 100:
-        sla = "Immediate"
-    elif rec.get("risk") == "High":
+    if action_safety == "blocked" or rec.get("risk") == "High":
         sla = "Next cycle"
+    elif action_safety == "auto_safe" and rec.get("estimated_savings", 0) >= 100:
+        sla = "Immediate"
 
     return {
         **rec,
-        "owner":            owner,
-        "automation":       ops["automation"],
-        "automation_badge": ops["automation_badge"],
-        "sla":              sla,
+        "owner": owner,
+        "automation": automation,
+        "automation_badge": automation_badge,
+        "sla": sla,
     }

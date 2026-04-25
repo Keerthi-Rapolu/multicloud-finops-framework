@@ -17,6 +17,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from intelligence.causal_engine import run as run_causal
+from intelligence.forecasting import build_forecast
 from intelligence.waste_detector import run as detect_waste
 from intelligence.impact_simulator import run as simulate
 from dashboard._shared import (
@@ -24,10 +25,14 @@ from dashboard._shared import (
     COLOR_INEFFICIENCY,
     COLOR_INFO,
     COLOR_OPTIMIZED,
+    LABEL_ESTIMATED_MONTHLY_SAVINGS,
     diagnose,
+    load_scoped_df,
+    overlay_recommendation_actions,
     render_headline,
     render_priority_badge,
 )
+from dashboard.exporters import executive_summary_markdown
 
 _TEAM_LABELS = {
     "data-eng":    "Data Engineering",
@@ -63,10 +68,7 @@ st.caption(
     "with root cause evidence, quantified impact, and action justification."
 )
 
-df = st.session_state.get("df")
-if df is None:
-    st.warning("Return to the home page first to load data.")
-    st.stop()
+df, month_filter, _ = load_scoped_df(render_sidebar=True)
 
 # ---------------------------------------------------------------------------
 # Executive headline (Critical #1)
@@ -118,14 +120,24 @@ filtered_teams = {
     ins["scope"].replace("team:", "")
     for ins in filtered
 }
+scope_df = (
+    df[df["allocated_team"].isin(filtered_teams)].copy()
+    if filtered_teams
+    else df.iloc[0:0].copy()
+)
+filtered_findings = [
+    f for f in findings
+    if f["allocated_team"] in filtered_teams
+] if findings else []
 filtered_recs = [
     r for r in recs
     if r["allocated_team"] in filtered_teams
 ] if recs else []
+filtered_recs = overlay_recommendation_actions(filtered_recs)
 
 # Pre-compute per-team waste totals from findings
 _team_waste: dict[str, float] = {}
-for f in findings:
+for f in filtered_findings:
     team = f["allocated_team"]
     impact = f["nec_waste"] if f["nec_waste"] > 0 else f["nec_used"]
     _team_waste[team] = _team_waste.get(team, 0.0) + impact
@@ -144,15 +156,23 @@ n_teams     = len(filtered)
 n_anomalies = sum(1 for ins in filtered if ins["anomaly"])
 avg_change  = sum(ins["cost_change_pct"] for ins in filtered) / n_teams if n_teams else 0.0
 total_savings = sum(r["estimated_savings"] for r in filtered_recs)
-total_nec   = df["nec"].sum()
-waste_total = df["nec_waste"].sum()
-waste_pct   = waste_total / total_nec * 100 if total_nec else 0
+total_nec   = scope_df["nec"].sum()
+recoverable_total = sum(
+    f["nec_waste"] if f["nec_waste"] > 0 else f["nec_used"]
+    for f in filtered_findings
+)
+commitment_waste_total = scope_df["nec_waste"].sum()
+commitment_waste_pct   = commitment_waste_total / total_nec * 100 if total_nec else 0
 
 ck1, ck2, ck3 = st.columns(3)
 ck1.metric("Teams with Cost Increases", str(sum(1 for ins in filtered if ins["cost_change_pct"] > 0)),
            delta=f"{n_teams} total teams")
 ck2.metric("Avg MoM Change",       f"{avg_change:+.1f}%")
-ck3.metric("Recoverable Savings",  f"${total_savings:,.0f}")
+ck3.metric(LABEL_ESTIMATED_MONTHLY_SAVINGS,  f"${total_savings:,.0f}")
+
+if not filtered:
+    st.info("No insights match the current filter selection.")
+    st.stop()
 
 if n_anomalies:
     anomaly_teams = ", ".join(
@@ -167,17 +187,79 @@ if n_anomalies:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
+# Forecast Outlook
+# ---------------------------------------------------------------------------
+
+forecast_target_month = month_filter or (
+    str(scope_df["billing_month"].max()) if not scope_df.empty else None
+)
+forecast = build_forecast(
+    scope_df,
+    filtered_recs,
+    target_month=forecast_target_month,
+)
+
+st.subheader("Forecast Outlook")
+fc1, fc2, fc3 = st.columns(3)
+fc1.metric("Projected Month-End NEC", f"${forecast.projected_nec:,.0f}")
+fc2.metric("Waste if No Action Taken", f"${forecast.no_action_waste:,.0f}")
+fc3.metric("Savings if Actions Applied", f"${forecast.projected_savings:,.0f}")
+
+forecast_fig = go.Figure(
+    [
+        go.Bar(
+            name="Projected NEC",
+            x=["Projected Month-End"],
+            y=[forecast.projected_nec],
+            marker_color=COLOR_INFO,
+            text=[f"${forecast.projected_nec:,.0f}"],
+            textposition="outside",
+        ),
+        go.Bar(
+            name="No-Action Waste",
+            x=["Projected Month-End"],
+            y=[forecast.no_action_waste],
+            marker_color=COLOR_BLOCKER,
+            text=[f"${forecast.no_action_waste:,.0f}"],
+            textposition="outside",
+        ),
+        go.Bar(
+            name="Optimized NEC",
+            x=["Projected Month-End"],
+            y=[forecast.optimized_nec],
+            marker_color=COLOR_OPTIMIZED,
+            text=[f"${forecast.optimized_nec:,.0f}"],
+            textposition="outside",
+        ),
+    ]
+)
+forecast_fig.update_layout(
+    barmode="group",
+    height=280,
+    margin=dict(t=10, b=30),
+    yaxis_title="USD",
+    legend=dict(orientation="h", y=1.1),
+)
+st.plotly_chart(forecast_fig, use_container_width=True)
+st.caption(
+    f"{forecast.target_month}: {forecast.method}. "
+    f"Forecast uses {forecast.months_of_history} prior month(s) of history. "
+    f"Savings scenario assumes {forecast.savings_basis}."
+)
+
+st.markdown("---")
+
+# ---------------------------------------------------------------------------
 # Section 1 — Trend (TIME DIMENSION FIRST — the most important context)
 # ---------------------------------------------------------------------------
 
 n_trend_months = 0  # fallback — set inside the trend block if trend_df is populated
 
-if not filtered:
-    st.info("No insights match the current filter selection.")
-    st.stop()
+plot_trend = trend_df[trend_df["allocated_team"].isin(filtered_teams)].copy()
 
-if not trend_df.empty:
-    plot_trend = trend_df[trend_df["allocated_team"].isin(sel_teams)].copy()
+if plot_trend.empty:
+    st.info("No trend data for the selected teams.")
+else:
     plot_trend["team_label"] = (
         plot_trend["allocated_team"].map(_TEAM_LABELS)
         .fillna(plot_trend["allocated_team"].str.replace("-", " ").str.title())
@@ -191,7 +273,7 @@ if not trend_df.empty:
         )
         fig_trend = px.bar(
             bar_data, x="period_nec", y="team_label", orientation="h",
-            labels={"period_nec": "Cloud Spend (USD)", "team_label": "Team"},
+            labels={"period_nec": "Net Effective Cost (USD)", "team_label": "Team"},
             color="team_label", color_discrete_sequence=_TEAM_COLORS,
             text=bar_data["period_nec"].map("${:,.0f}".format),
         )
@@ -225,7 +307,7 @@ if not trend_df.empty:
                 ))
         fig_trend.update_layout(
             height=340, margin=dict(t=10, b=40),
-            xaxis_title="Billing Month", yaxis_title="Cloud Spend (USD)",
+            xaxis_title="Billing Month", yaxis_title="Net Effective Cost (USD)",
             legend=dict(orientation="h", y=-0.2), hovermode="x unified",
         )
         st.plotly_chart(fig_trend, use_container_width=True)
@@ -263,22 +345,22 @@ cause_counts = Counter(
 primary_cause_key   = cause_counts.most_common(1)[0][0] if cause_counts else None
 primary_cause_label = _CAUSE_LABELS.get(primary_cause_key, "—") if primary_cause_key else "—"
 
-untagged_nec = df.loc[~df["is_tagged"].fillna(False), "nec"].sum()
+untagged_nec = scope_df.loc[~scope_df["is_tagged"].fillna(False), "nec"].sum()
 untagged_pct = untagged_nec / total_nec * 100 if total_nec else 0
 
 # Top opportunity
 top_rec_action = "—"
 top_rec_savings = 0.0
 if filtered_recs:
-    top_rec = filtered_recs[0]
+    top_rec = max(filtered_recs, key=lambda r: r["estimated_savings"])
     top_rec_action  = top_rec["action"].replace("_", " ").title()
     top_rec_savings = top_rec["estimated_savings"]
 
-n_months = trend_df["billing_month"].nunique() if not trend_df.empty else 1
-period   = trend_df["billing_month"].max() if not trend_df.empty else "—"
+n_months = plot_trend["billing_month"].nunique() if not plot_trend.empty else 1
+period   = plot_trend["billing_month"].max() if not plot_trend.empty else "—"
 
 summary_lines = [
-    f"- **{waste_pct:.1f}% recoverable waste** (${waste_total:,.0f}) identified across {n_teams} teams",
+    f"- **${recoverable_total:,.0f}/month recoverable opportunity** identified across {n_teams} teams",
 ]
 if untagged_pct >= 10:
     summary_lines.append(
@@ -286,6 +368,11 @@ if untagged_pct >= 10:
     )
 elif primary_cause_label != "—":
     summary_lines.append(f"- **Primary driver:** {primary_cause_label}")
+
+if commitment_waste_total > 0:
+    summary_lines.append(
+        f"- **Commitment waste in scope:** {commitment_waste_pct:.1f}% of NEC (${commitment_waste_total:,.0f})"
+    )
 
 if top_rec_savings > 0:
     summary_lines.append(
@@ -309,17 +396,51 @@ st.info(
     + f"\n\n**Recommended actions:**\n{action_lines}"
 )
 
+summary_md = executive_summary_markdown(
+    title="FinOps Executive Summary",
+    total_nec=float(total_nec),
+    unattributed_spend=float(untagged_nec),
+    waste=float(commitment_waste_total),
+    estimated_savings=float(total_savings),
+    forecast_month=forecast.target_month,
+    forecast_nec=float(forecast.projected_nec),
+    forecast_waste=float(forecast.no_action_waste),
+    forecast_savings=float(forecast.projected_savings),
+    forecast_basis=forecast.savings_basis,
+    recommendations=filtered_recs,
+)
+st.download_button(
+    "Download Executive Summary (.md)",
+    summary_md.encode("utf-8"),
+    file_name="finops_executive_summary.md",
+    mime="text/markdown",
+)
+
 # ---------------------------------------------------------------------------
 # "What should I do this week?" — top 3 executive actions
 # ---------------------------------------------------------------------------
 
 st.subheader("What should I do this week?")
-st.caption("Top 3 highest-ROI actions, ordered by: savings × low-risk × immediate impact.")
+st.caption("Top 3 actions ordered by: highest savings, lowest risk, highest confidence, shortest time to savings.")
+
+_STATUS_PRIORITY = {
+    "recommended": 0,
+    "approved": 1,
+    "implemented": 2,
+    "verified": 3,
+    "rejected": 4,
+}
+_TIME_PRIORITY = {"Immediate": 0, "1 week": 1, "1 month": 2}
 
 _weekly_recs = sorted(
-    [r for r in filtered_recs if r["risk"] in ("Low", "Medium")],
-    key=lambda r: (r.get("roi_score", 0), r["estimated_savings"]),
-    reverse=True,
+    [r for r in filtered_recs if r.get("action_status", "recommended") != "rejected"],
+    key=lambda r: (
+        -r["estimated_savings"],
+        r.get("risk_score", 50),
+        -r.get("confidence", 0.0),
+        _TIME_PRIORITY.get(r.get("time_to_realize", "1 month"), 99),
+        _STATUS_PRIORITY.get(r.get("action_status", "recommended"), 99),
+    ),
 )[:3]
 
 if not _weekly_recs:
@@ -334,6 +455,9 @@ if _weekly_recs:
         roi      = rec.get("roi_score", 0)
         savings  = rec["estimated_savings"]
         risk     = rec["risk"]
+        status   = rec.get("action_status", "recommended").replace("_", " ").title()
+        approval = "Yes" if rec.get("approval_required") else "No"
+        safety   = rec.get("action_safety", "approval_required").replace("_", " ").title()
         risk_color = {"Low": "#22c55e", "Medium": "#eab308", "High": "#ef4444"}.get(risk, "#6b7280")
 
         st.markdown(
@@ -344,9 +468,18 @@ if _weekly_recs:
             f'Effort: <b>{effort}</b> &nbsp;·&nbsp; '
             f'Time to savings: <b>{ttr}</b> &nbsp;·&nbsp; '
             f'ROI: <b>${roi:,.0f}/hr of work</b> &nbsp;·&nbsp; '
-            f'Risk: <span style="color:{risk_color}; font-weight:700">{risk}</span>'
+            f'Risk: <span style="color:{risk_color}; font-weight:700">{risk}</span> '
+            f'({rec.get("risk_score", 0)}/100) &nbsp;·&nbsp; '
+            f'Status: <b>{status}</b> &nbsp;·&nbsp; '
+            f'Approval required: <b>{approval}</b> &nbsp;·&nbsp; '
+            f'Safety: <b>{safety}</b>'
             f'</span></div>',
             unsafe_allow_html=True,
+        )
+        st.caption(
+            f"{rec.get('risk_reason', 'Review manually.')} "
+            f"{rec.get('evidence_summary', '')} "
+            f"{rec.get('confidence_reason', '')}"
         )
 else:
     st.info("No actionable recommendations found for this filter selection.")
@@ -369,8 +502,8 @@ if untagged_pct >= 20:
         "name":       "Governance gap",
         "icon":       ":mag:",
         "verdict":    f"{untagged_pct:.0f}% of NEC (${untagged_nec:,.0f}) is unattributed.",
-        "evidence":   f"Derived from {len(df):,} billing rows; `is_tagged=False` on "
-                      f"{(~df['is_tagged'].fillna(False)).sum():,} rows.",
+        "evidence":   f"Derived from {len(scope_df):,} billing rows; `is_tagged=False` on "
+                      f"{(~scope_df['is_tagged'].fillna(False)).sum():,} rows.",
         "data_window": f"Current billing period ({period})",
         "confidence_pct": 95,
         "confidence_reason": "Billing-confirmed signal — `is_tagged` is a direct column, "
@@ -389,7 +522,7 @@ elif untagged_pct >= 10:
         "icon":       ":mag:",
         "verdict":    f"{untagged_pct:.0f}% of NEC (${untagged_nec:,.0f}) lacks explicit attribution.",
         "evidence":   f"Heuristic allocation is compensating on "
-                      f"{(~df['is_tagged'].fillna(False)).sum():,} rows.",
+                      f"{(~scope_df['is_tagged'].fillna(False)).sum():,} rows.",
         "data_window": f"Current billing period ({period})",
         "confidence_pct": 85,
         "confidence_reason": "Direct `is_tagged` column signal — allocation fallback uncertainty "
@@ -402,12 +535,12 @@ elif untagged_pct >= 10:
     })
 
 # Signal: commitment efficiency
-if waste_pct <= 3:
+if commitment_waste_pct <= 3:
     signals.append({
         "name":       "Commitment efficiency",
         "icon":       ":white_check_mark:",
-        "verdict":    f"{waste_pct:.1f}% waste — reserved capacity fully utilised (target <3%).",
-        "evidence":   f"From `nec_waste > 0` rows: {(df['nec_waste'].fillna(0) > 0).sum():,} "
+        "verdict":    f"{commitment_waste_pct:.1f}% waste — reserved capacity fully utilised (target <3%).",
+        "evidence":   f"From `nec_waste > 0` rows: {(scope_df['nec_waste'].fillna(0) > 0).sum():,} "
                       "waste rows flagged across all commitment types (RI + SP).",
         "data_window": f"Current billing period ({period})",
         "confidence_pct": 92,
@@ -418,19 +551,19 @@ if waste_pct <= 3:
         "color":      COLOR_OPTIMIZED,
         "severity":   "P3",
     })
-elif waste_pct <= 8:
+elif commitment_waste_pct <= 8:
     signals.append({
         "name":       "Commitment optimization opportunity",
         "icon":       ":orange_circle:",
-        "verdict":    f"{waste_pct:.1f}% of NEC (${waste_total:,.0f}) is idle RI/SP capacity.",
-        "evidence":   f"`nec_waste > 0` on {(df['nec_waste'].fillna(0) > 0).sum():,} rows.",
+        "verdict":    f"{commitment_waste_pct:.1f}% of NEC (${commitment_waste_total:,.0f}) is idle RI/SP capacity.",
+        "evidence":   f"`nec_waste > 0` on {(scope_df['nec_waste'].fillna(0) > 0).sum():,} rows.",
         "data_window": f"Current billing period ({period})",
         "confidence_pct": 90,
         "confidence_reason": "Billing-confirmed idle capacity; recovery estimate uses "
                              "85% realization rate (industry standard for partial release).",
         "signal_weight": 0.85,
         "impact":     "At $10M/month scale this waste rate = "
-                      f"${10_000_000 * waste_pct / 100:,.0f}/month avoidable.",
+                      f"${10_000_000 * commitment_waste_pct / 100:,.0f}/month avoidable.",
         "fix":        "Review commitment coverage — see Waste & Recommendations for specific actions.",
         "color":      COLOR_INEFFICIENCY,
         "severity":   "P1",
@@ -439,15 +572,15 @@ else:
     signals.append({
         "name":       "Commitment waste elevated",
         "icon":       ":red_circle:",
-        "verdict":    f"{waste_pct:.1f}% of NEC (${waste_total:,.0f}) in idle commitments.",
-        "evidence":   f"`nec_waste > 0` on {(df['nec_waste'].fillna(0) > 0).sum():,} rows; "
+        "verdict":    f"{commitment_waste_pct:.1f}% of NEC (${commitment_waste_total:,.0f}) in idle commitments.",
+        "evidence":   f"`nec_waste > 0` on {(scope_df['nec_waste'].fillna(0) > 0).sum():,} rows; "
                       f"idle capacity ratio exceeds 10% threshold.",
         "data_window": f"Current billing period ({period})",
         "confidence_pct": 94,
         "confidence_reason": "Direct billing signal; confidence degraded only by "
                              "future usage variability.",
         "signal_weight": 1.0,
-        "impact":     f"At $10M/month scale = ${10_000_000 * waste_pct / 100:,.0f}/month avoidable.",
+        "impact":     f"At $10M/month scale = ${10_000_000 * commitment_waste_pct / 100:,.0f}/month avoidable.",
         "fix":        "Immediate review recommended — release or right-size idle commitments.",
         "color":      COLOR_BLOCKER,
         "severity":   "P0",

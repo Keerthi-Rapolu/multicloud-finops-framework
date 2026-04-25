@@ -7,6 +7,7 @@ Flow: Problem → Root Cause → Action → Savings → Risk
 """
 
 import sys
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -22,11 +23,16 @@ from dashboard._shared import (
     COLOR_BLOCKER,
     COLOR_INEFFICIENCY,
     COLOR_OPTIMIZED,
+    LABEL_ESTIMATED_MONTHLY_SAVINGS,
     diagnose,
     enrich_recommendation,
+    load_scoped_df,
+    overlay_recommendation_actions,
     render_headline,
     render_priority_badge,
+    save_recommendation_action,
 )
+from dashboard.exporters import jira_action_csv_bytes, recommendation_csv_bytes
 
 _TYPE_COLORS = {
     "unused_commitment":        "#ef4444",
@@ -63,10 +69,7 @@ st.set_page_config(page_title="Waste & Recommendations", layout="wide")
 st.title("Waste & Recommendations")
 st.caption("Where is cost leaking, and what should you do about it?")
 
-df = st.session_state.get("df")
-if df is None:
-    st.warning("Return to the home page first to load data.")
-    st.stop()
+df, _, _ = load_scoped_df(render_sidebar=True)
 
 # Executive headline (Critical #1)
 diag = diagnose(df)
@@ -123,6 +126,7 @@ filtered_recs = [
     and r.get("waste_type")     in sel_types
     and r["risk"]               in sel_risks
 ] if recs else []
+filtered_recs = overlay_recommendation_actions(filtered_recs)
 
 # ---------------------------------------------------------------------------
 # KPI row
@@ -135,22 +139,24 @@ total_waste_detected = sum(
 total_nec = scope_df["nec"].sum()
 waste_pct = total_waste_detected / total_nec * 100 if total_nec else 0
 total_savings  = sum(r["estimated_savings"] for r in filtered_recs)
+savings_pct_of_nec = total_savings / total_nec * 100 if total_nec else 0
 n_quick_wins   = sum(1 for r in filtered_recs if r["risk"] == "Low")
 
 ck1, ck2, ck3, ck4 = st.columns(4)
 ck1.metric("Waste Detected",      f"${total_waste_detected:,.0f}",
            delta=f"{waste_pct:.1f}% of NEC", delta_color="inverse")
-ck2.metric("Savings Opportunity", f"${total_savings:,.0f}")
+ck2.metric(LABEL_ESTIMATED_MONTHLY_SAVINGS, f"${total_savings:,.0f}")
 ck3.metric("Recommendations",     str(len(filtered_recs)))
 ck4.metric("Low-Risk Quick Wins", str(n_quick_wins))
 
 # Enterprise scale projection — makes small numbers meaningful
-if total_nec > 0 and waste_pct > 0:
+if total_nec > 0 and total_savings > 0:
     enterprise_monthly  = 10_000_000
-    enterprise_savings  = enterprise_monthly * (waste_pct / 100) * 0.85
+    enterprise_savings  = enterprise_monthly * (savings_pct_of_nec / 100)
     st.info(
         f":scales: **Enterprise scale projection** — at $10M/month cloud spend, "
-        f"this {waste_pct:.1f}% waste rate = **${enterprise_savings:,.0f}/month** recoverable. "
+        f"this scope implies **{savings_pct_of_nec:.1f}% estimated monthly savings** "
+        f"(**${enterprise_savings:,.0f}/month** at enterprise scale). "
         f"This environment: **${total_savings:,.0f}/month** identified opportunity."
     )
 
@@ -268,7 +274,7 @@ with col_xc2:
         color="waste_pct",
         color_continuous_scale=[[0, COLOR_OPTIMIZED], [0.5, COLOR_INEFFICIENCY], [1, COLOR_BLOCKER]],
         range_color=[0, max(10.0, cross["waste_pct"].max())],
-        labels={"waste_pct": "Waste % of NEC", "cloud_label": "Cloud"},
+        labels={"waste_pct": "Waste as % of NEC", "cloud_label": "Cloud"},
         text=cross.sort_values("waste_pct", ascending=True)["waste_pct"].map("{:.1f}%".format),
     )
     fig_xc_rel.update_traces(textposition="outside")
@@ -400,11 +406,14 @@ else:
                          ),
         "Owner":         table_df["owner"],
         "Action":        table_df["action_label"],
+        "Status":        table_df.get("action_status", pd.Series(["recommended"] * len(table_df))).str.replace("_", " ").str.title(),
         "Effort":        table_df.get("effort", pd.Series(["—"] * len(table_df))),
         "Time to $ Save": table_df.get("time_to_realize", pd.Series(["—"] * len(table_df))),
         "ROI ($/hr)":    table_df.get("roi_score", pd.Series([0.0] * len(table_df))).map("${:,.0f}".format),
         "Savings":       table_df["estimated_savings"].map("${:,.0f}".format),
         "Savings %":     table_df["savings_pct"].map("{:.1f}%".format),
+        "Approval":      table_df.get("approval_required", pd.Series([False] * len(table_df))).map(lambda x: "Yes" if x else "No"),
+        "Safety":        table_df.get("action_safety", pd.Series(["approval_required"] * len(table_df))).str.replace("_", " ").str.title(),
         "SLA":           table_df["sla"],
         "Risk":          table_df["risk"],
     })
@@ -421,6 +430,28 @@ else:
             "Immediate":  "background-color:#fee2e2; color:#991b1b; font-weight:600",
             "This week":  "background-color:#fef9c3; color:#854d0e",
             "Next cycle": "background-color:#e0e7ff; color:#3730a3",
+        }.get(val, "")
+
+    def _status_color(val: str) -> str:
+        return {
+            "Recommended": "background-color:#e0e7ff; color:#3730a3",
+            "Approved": "background-color:#dbeafe; color:#1d4ed8",
+            "Rejected": "background-color:#f3f4f6; color:#374151",
+            "Implemented": "background-color:#dcfce7; color:#166534",
+            "Verified": "background-color:#bbf7d0; color:#166534; font-weight:600",
+        }.get(val, "")
+
+    def _approval_color(val: str) -> str:
+        if val == "Yes":
+            return "background-color:#fef9c3; color:#854d0e"
+        return "background-color:#dcfce7; color:#166534"
+
+    def _safety_color(val: str) -> str:
+        return {
+            "Auto Safe": "background-color:#dcfce7; color:#166534",
+            "Approval Required": "background-color:#fef9c3; color:#854d0e",
+            "Manual Review": "background-color:#fee2e2; color:#991b1b",
+            "Blocked": "background-color:#111827; color:#ffffff",
         }.get(val, "")
 
     def _automation_color(val: str) -> str:
@@ -448,6 +479,9 @@ else:
     st.dataframe(
         top10_df.style
             .map(_risk_color,   subset=["Risk"])
+            .map(_status_color, subset=["Status"])
+            .map(_approval_color, subset=["Approval"])
+            .map(_safety_color, subset=["Safety"])
             .map(_sla_color,    subset=["SLA"])
             .map(_effort_color, subset=["Effort"])
             .map(_time_color,   subset=["Time to $ Save"]),
@@ -461,18 +495,93 @@ else:
             st.dataframe(
                 display_df.style
                     .map(_risk_color,   subset=["Risk"])
+                    .map(_status_color, subset=["Status"])
+                    .map(_approval_color, subset=["Approval"])
+                    .map(_safety_color, subset=["Safety"])
                     .map(_sla_color,    subset=["SLA"])
                     .map(_effort_color, subset=["Effort"])
                     .map(_time_color,   subset=["Time to $ Save"]),
                 use_container_width=True, hide_index=True,
             )
 
-    # CSV export (addressing a feature gap I flagged earlier)
-    csv_bytes = display_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇️ Download as CSV (paste into tickets/Jira)",
-        csv_bytes,
+    st.markdown("**Action lifecycle**")
+    lifecycle_options = {
+        f"{row['Rank']}. {row['action_label']} | {row['allocated_team']} | ${row['estimated_savings']:,.0f}/month": idx
+        for idx, row in table_df.head(25).iterrows()
+    }
+    if lifecycle_options:
+        selected_label = st.selectbox(
+            "Update recommendation state",
+            list(lifecycle_options.keys()),
+            key="recommendation_lifecycle_select",
+        )
+        selected_row = table_df.loc[lifecycle_options[selected_label]]
+        current_status = str(selected_row.get("action_status", "recommended"))
+        current_owner = str(selected_row.get("action_owner", selected_row.get("owner_email", "")) or "")
+        current_realized = float(selected_row.get("realized_savings", 0.0) or 0.0)
+        default_impl_date = (
+            pd.to_datetime(selected_row["implementation_date"]).date()
+            if pd.notna(selected_row.get("implementation_date"))
+            else date.today()
+        )
+
+        with st.form("recommendation_lifecycle_form"):
+            lifecycle_cols = st.columns(4)
+            action_status = lifecycle_cols[0].selectbox(
+                "Status",
+                ["recommended", "approved", "rejected", "implemented", "verified"],
+                index=["recommended", "approved", "rejected", "implemented", "verified"].index(current_status),
+            )
+            action_owner = lifecycle_cols[1].text_input("Action owner", value=current_owner)
+            realized_savings = lifecycle_cols[2].number_input(
+                "Realized savings",
+                min_value=0.0,
+                value=current_realized,
+                step=10.0,
+            )
+            implementation_date = lifecycle_cols[3].date_input(
+                "Implementation date",
+                value=default_impl_date,
+            )
+
+            st.caption(
+                f"Risk: {selected_row['risk']} ({selected_row.get('risk_score', 0)}/100) | "
+                f"Approval required: {'Yes' if selected_row.get('approval_required') else 'No'} | "
+                f"Safety: {str(selected_row.get('action_safety', 'approval_required')).replace('_', ' ').title()}"
+            )
+            st.caption(
+                f"{selected_row.get('risk_reason', '')} "
+                f"{selected_row.get('evidence_summary', '')} "
+                f"{selected_row.get('confidence_reason', '')}"
+            )
+
+            if st.form_submit_button("Save lifecycle update"):
+                save_recommendation_action(
+                    selected_row["recommendation_id"],
+                    {
+                        "action_status": action_status,
+                        "action_owner": action_owner,
+                        "created_date": str(selected_row.get("created_date", date.today().isoformat())),
+                        "implementation_date": implementation_date.isoformat()
+                        if action_status in {"implemented", "verified"}
+                        else None,
+                        "realized_savings": realized_savings,
+                    },
+                )
+                st.success("Recommendation state saved.")
+                st.rerun()
+
+    export_cols = st.columns(2)
+    export_cols[0].download_button(
+        "Download Recommendation CSV",
+        recommendation_csv_bytes(table_df.to_dict("records")),
         file_name="finops_recommendations.csv",
+        mime="text/csv",
+    )
+    export_cols[1].download_button(
+        "Download Jira Action List",
+        jira_action_csv_bytes(table_df.to_dict("records")),
+        file_name="finops_jira_actions.csv",
         mime="text/csv",
     )
 
@@ -531,9 +640,13 @@ else:
                 conf_label = "high" if conf >= 0.75 else ("medium" if conf >= 0.55 else "low")
                 st.markdown(
                     "**Why this recommendation?**  \n"
-                    "- **Detected by:** `waste_detector` (billing-confirmed signal)  \n"
-                    f"- **Evidence:** {rec['rationale']}  \n"
+                    f"- **Evidence summary:** {rec.get('evidence_summary', rec['rationale'])}  \n"
                     f"- **Confidence:** {conf:.0%} ({conf_label})  \n"
+                    f"- **Confidence reason:** {rec.get('confidence_reason', 'Billing signal')}  \n"
+                    f"- **Risk:** {rec['risk']} ({rec.get('risk_score', 0)}/100)  \n"
+                    f"- **Risk reason:** {rec.get('risk_reason', 'Review manually.')}  \n"
+                    f"- **Approval required:** {'Yes' if rec.get('approval_required') else 'No'}  \n"
+                    f"- **Action safety:** {str(rec.get('action_safety', 'approval_required')).replace('_', ' ').title()}  \n"
                     f"- **Priority score:** {rec['priority_score']:.1f} / 100 "
                     "(savings_pct × confidence)  \n"
                     f"- **If ignored for 12 months:** ~${rec['estimated_savings'] * 12:,.0f} "
@@ -564,7 +677,6 @@ else:
     st.subheader("Step 5 — Projected impact if actions applied")
 
     low_savings        = sum(r["estimated_savings"] for r in filtered_recs if r["risk"] == "Low")
-    savings_pct_of_nec = total_savings / total_nec * 100 if total_nec else 0
     low_pct_of_nec     = low_savings / total_nec * 100 if total_nec else 0
     high_count         = sum(1 for r in filtered_recs if r["risk"] == "High")
 
@@ -643,7 +755,7 @@ else:
         st.markdown("**Current state**")
         st.markdown(f"- NEC: **${total_nec:,.0f}/month**")
         st.markdown(f"- Waste: **${total_waste_detected:,.0f}** ({waste_pct:.1f}% of NEC)")
-        st.markdown(f"- Recoverable: **${total_savings:,.0f}/month**")
+        st.markdown(f"- Estimated monthly savings: **${total_savings:,.0f}/month**")
         st.markdown(f"- Quick wins available: **{n_quick_wins}** low-risk actions")
     with col_a:
         st.markdown("**After all recommendations applied**")
