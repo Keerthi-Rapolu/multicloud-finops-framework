@@ -144,6 +144,7 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                     nullif(trim(lower(json_extract_string(Tags, '$.business_unit'))), '') AS tag_business_unit,
                     nullif(trim(lower(json_extract_string(Tags, '$.application'))), '') AS tag_application,
                     nullif(trim(lower(json_extract_string(Tags, '$.owner_email'))), '') AS tag_owner_email,
+                    nullif(trim(lower(json_extract_string(Tags, '$.support_group'))), '') AS tag_support_group,
                     nullif(trim(lower(json_extract_string(Tags, '$.workload_criticality'))), '') AS tag_workload_criticality,
                     nullif(trim(lower(json_extract_string(Tags, '$.sla_tier'))), '') AS tag_sla_tier,
                     CASE
@@ -281,6 +282,11 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                         FROM (SELECT unnest(try_cast(labels AS JSON[])) AS item)
                         WHERE item->>'key' = 'owner_email' LIMIT 1
                     ))), '') AS tag_owner_email,
+                    nullif(trim(lower((
+                        SELECT item->>'value'
+                        FROM (SELECT unnest(try_cast(labels AS JSON[])) AS item)
+                        WHERE item->>'key' = 'support_group' LIMIT 1
+                    ))), '') AS tag_support_group,
                     nullif(trim(lower((
                         SELECT item->>'value'
                         FROM (SELECT unnest(try_cast(labels AS JSON[])) AS item)
@@ -426,7 +432,7 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                     discount_type, billed_cost, retail_cost, nec_used,
                     allocated_nec_waste AS nec_waste, nec_used AS nec, effective_unit_price,
                     tag_team, tag_environment, tag_cost_center,
-                    tag_business_unit, tag_application, tag_owner_email,
+                    tag_business_unit, tag_application, tag_owner_email, tag_support_group,
                     tag_workload_criticality, tag_sla_tier,
                     is_tagged, allocated_team, allocated_nec, allocation_n_teams,
                     is_shared_cost, cloud_provider
@@ -442,7 +448,7 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                     discount_type, billed_cost, retail_cost, nec_used,
                     allocated_nec_waste AS nec_waste, nec_used AS nec, effective_unit_price,
                     tag_team, tag_environment, tag_cost_center,
-                    tag_business_unit, tag_application, tag_owner_email,
+                    tag_business_unit, tag_application, tag_owner_email, tag_support_group,
                     tag_workload_criticality, tag_sla_tier,
                     is_tagged, allocated_team, allocated_nec, allocation_n_teams,
                     is_shared_cost, cloud_provider
@@ -480,7 +486,7 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                         ELSE 'on_demand'
                     END AS discount_type,
                     tag_team, tag_environment, tag_cost_center,
-                    tag_business_unit, tag_application, tag_owner_email,
+                    tag_business_unit, tag_application, tag_owner_email, tag_support_group,
                     tag_workload_criticality, tag_sla_tier,
                     is_tagged, cloud_provider
                 FROM staged
@@ -527,6 +533,7 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                     CAST(NULL AS VARCHAR) AS tag_business_unit,
                     CAST(NULL AS VARCHAR) AS tag_application,
                     CAST(NULL AS VARCHAR) AS tag_owner_email,
+                    CAST(NULL AS VARCHAR) AS tag_support_group,
                     CAST(NULL AS VARCHAR) AS tag_workload_criticality,
                     CAST(NULL AS VARCHAR) AS tag_sla_tier,
                     is_tagged,
@@ -549,7 +556,7 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                     vcpus AS vcpu,
                     CAST(NULL AS INTEGER) AS memory_gb,
                     tag_team, tag_environment, tag_cost_center,
-                    tag_business_unit, tag_application, tag_owner_email,
+                    tag_business_unit, tag_application, tag_owner_email, tag_support_group,
                     tag_workload_criticality, tag_sla_tier,
                     is_tagged, allocated_team, allocated_nec, is_shared_cost, is_commitment_waste
                 FROM intermediate.int_azure_nec
@@ -569,7 +576,7 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                     compute_cores AS vcpu,
                     compute_memory_gb AS memory_gb,
                     tag_team, tag_environment, tag_cost_center,
-                    tag_business_unit, tag_application, tag_owner_email,
+                    tag_business_unit, tag_application, tag_owner_email, tag_support_group,
                     tag_workload_criticality, tag_sla_tier,
                     is_tagged, tag_team AS allocated_team, nec AS allocated_nec,
                     false AS is_shared_cost, is_unused_reservation AS is_commitment_waste
@@ -663,6 +670,17 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                     END
                 ) AS owner_email,
                 coalesce(
+                    tag_support_group,
+                    CASE allocated_team
+                        WHEN 'platform' THEN 'platform-operations'
+                        WHEN 'data-eng' THEN 'data-platform-ops'
+                        WHEN 'frontend' THEN 'customer-experience-support'
+                        WHEN 'backend' THEN 'api-operations'
+                        WHEN 'ml' THEN 'ml-platform-sre'
+                        ELSE 'finops-governance'
+                    END
+                ) AS support_group,
+                coalesce(
                     tag_workload_criticality,
                     CASE
                         WHEN coalesce(tag_environment, 'prod') = 'prod' AND allocated_team = 'platform' THEN 'mission_critical'
@@ -682,7 +700,7 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                                 WHEN coalesce(tag_environment, 'prod') IN ('staging', 'test', 'qa', 'nonprod') THEN 'medium'
                                 ELSE 'low'
                             END
-                        ) = 'mission_critical' THEN 'gold'
+                        ) = 'mission_critical' THEN 'platinum'
                         WHEN coalesce(
                             tag_workload_criticality,
                             CASE
@@ -691,7 +709,16 @@ def build_mart(db_path: Path, data_root: Path) -> None:
                                 WHEN coalesce(tag_environment, 'prod') IN ('staging', 'test', 'qa', 'nonprod') THEN 'medium'
                                 ELSE 'low'
                             END
-                        ) = 'high' THEN 'silver'
+                        ) = 'high' THEN 'gold'
+                        WHEN coalesce(
+                            tag_workload_criticality,
+                            CASE
+                                WHEN coalesce(tag_environment, 'prod') = 'prod' AND allocated_team = 'platform' THEN 'mission_critical'
+                                WHEN coalesce(tag_environment, 'prod') = 'prod' THEN 'high'
+                                WHEN coalesce(tag_environment, 'prod') IN ('staging', 'test', 'qa', 'nonprod') THEN 'medium'
+                                ELSE 'low'
+                            END
+                        ) = 'medium' THEN 'silver'
                         ELSE 'bronze'
                     END
                 ) AS sla_tier

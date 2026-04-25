@@ -103,6 +103,7 @@ nec as (
         tag_business_unit,
         tag_application,
         tag_owner_email,
+        tag_support_group,
         tag_workload_criticality,
         tag_sla_tier,
         is_tagged,

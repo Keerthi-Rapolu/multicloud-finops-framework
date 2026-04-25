@@ -49,6 +49,7 @@ class WasteFinding(TypedDict):
     business_unit: NotRequired[str]
     application: NotRequired[str]
     owner_email: NotRequired[str]
+    support_group: NotRequired[str]
     workload_criticality: NotRequired[str]
     sla_tier: NotRequired[str]
     cpu_util_pct: NotRequired[float]
@@ -102,6 +103,7 @@ class Recommendation(TypedDict):
     business_unit: NotRequired[str]
     application: NotRequired[str]
     owner_email: NotRequired[str]
+    support_group: NotRequired[str]
     workload_criticality: NotRequired[str]
     sla_tier: NotRequired[str]
     cpu_util_pct: NotRequired[float]
@@ -110,6 +112,56 @@ class Recommendation(TypedDict):
     idle_hours: NotRequired[float]
     last_activity_at: NotRequired[str]
     action_status: NotRequired[LifecycleStatus]
+    owner: NotRequired[str]
     created_date: NotRequired[str]
     implementation_date: NotRequired[str | None]
     realized_savings: NotRequired[float]
+    verification_status: NotRequired[Literal["pending", "validated", "not_realized"]]
+    verification_notes: NotRequired[str]
+
+
+class ReasoningInput(TypedDict, total=False):
+    nec: float
+    list_cost: float
+    waste_amount: float
+    waste_pct: float
+    unattributed_spend: float
+    unattributed_pct: float
+    tagging_coverage_pct: float
+    commitment_utilization_pct: float
+    commitment_waste: float
+    cloud_provider: str
+    team: str
+    application: str
+    environment: str
+    owner_status: str
+    sla_status: str
+    trend_direction: str
+    month_over_month_change_pct: float
+    recommendation_type: str
+    estimated_savings: float
+    risk_level: RiskLevel
+    confidence_score: float
+    risk_score: int
+    support_group: str
+    workload_criticality: str
+    sla_tier: str
+    approval_required: bool
+
+
+class DecisionReasoning(TypedDict):
+    issue_type: str
+    decision_title: str
+    root_cause: str
+    evidence: list[str]
+    recommended_action: str
+    action_justification: str
+    confidence_score: float
+    confidence_reason: str
+    risk_score: int
+    risk_reason: str
+    approval_required: bool
+    priority_score: int
+    expected_impact: str
+    next_best_action: str
+    action_safety: ActionSafety

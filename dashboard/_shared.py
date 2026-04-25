@@ -229,7 +229,13 @@ def overlay_recommendation_actions(recommendations: list[dict]) -> list[dict]:
                 "created_date": saved.get("created_date", today),
                 "implementation_date": saved.get("implementation_date"),
                 "realized_savings": float(saved.get("realized_savings", 0.0) or 0.0),
+                "verification_status": saved.get("verification_status", "pending"),
+                "verification_notes": saved.get("verification_notes", ""),
                 "action_owner": saved.get(
+                    "action_owner",
+                    rec.get("owner_email") or TEAM_LABELS.get(rec.get("allocated_team", ""), rec.get("allocated_team", "Unassigned")),
+                ),
+                "owner": saved.get(
                     "action_owner",
                     rec.get("owner_email") or TEAM_LABELS.get(rec.get("allocated_team", ""), rec.get("allocated_team", "Unassigned")),
                 ),

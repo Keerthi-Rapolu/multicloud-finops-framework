@@ -1,6 +1,6 @@
-# Multi-Cloud FinOps Cost Intelligence Framework
+# Multi-Cloud FinOps Decision Engine
 
-> **An open-source, data-engineering-native framework that normalizes, allocates, and intelligently analyzes cloud costs across AWS, Azure, and GCP — moving FinOps from reactive reporting to proactive, evidence-backed optimization. Zero paid tooling required.**
+> **An open-source, explainable multi-cloud FinOps decision engine that combines NEC modeling, attribution governance, waste detection, reasoning, forecasting, and action tracking across AWS, Azure, and GCP — moving FinOps from reactive reporting to evidence-backed decision support.**
 
 **Authors:** Keerthi Rapolu · Rishika Naha &nbsp;|&nbsp; April 2026
 
@@ -16,10 +16,10 @@ Modern enterprises run workloads across multiple cloud providers simultaneously.
 | **Untagged resources** | 30–50% of cloud resources lack cost allocation tags in real deployments |
 | **RI/SP amortization** | `unblended_cost` shows `$0` for RI-covered hours — resources look free, distorting accountability |
 | **Shared infrastructure** | Networking, logging, and security costs have no direct owner and inflate team budgets arbitrarily |
-| **No prescriptive intelligence** | Existing tools report what was spent but cannot explain *why* costs changed, identify waste with ownership, or quantify the financial impact of fixing it |
+| **No prescriptive intelligence** | Existing tools report what was spent but cannot explain *why* costs changed, identify waste with ownership, quantify expected impact, or track recommendation state |
 | **No open-source standard** | Existing tools (CloudHealth, Apptio) are closed-source and expensive |
 
-This framework addresses all six gaps with a reproducible, SQL-first pipeline backed by a deterministic intelligence layer — runs entirely on your laptop or GitHub Actions free tier.
+This framework addresses all six gaps with a reproducible, SQL-first pipeline backed by a deterministic intelligence layer — and is designed to answer the operational questions dashboards usually leave open: what changed, why it changed, what to do next, how confident the system is, and how actions should be tracked.
 
 ---
 
@@ -189,7 +189,7 @@ The `is_commitment_waste` and `is_shared_cost` boolean flags allow downstream co
 
 ### Cost Intelligence Layer
 
-The intelligence layer sits downstream of the allocation engine and transforms billing data from descriptive reporting into prescriptive analysis. It comprises three engines that operate in a sequential pipeline:
+The intelligence layer sits downstream of the allocation engine and transforms billing data from descriptive reporting into prescriptive analysis. It comprises four engines that operate in a sequential pipeline:
 
 #### 1. Waste Detection Engine
 
@@ -226,6 +226,16 @@ Converts `WasteFinding` objects into prioritised `Recommendation` dicts by estim
 | `release_commitment` (underutilized) | 50% of waste signal | Medium |
 
 Recommendations are ranked by `priority_score = estimated_savings × (1 − risk_weight)`, surfacing the highest ROI, lowest risk actions first. The dashboard renders a full before/after scenario comparison showing projected spend reduction if all recommendations are applied.
+
+#### 4. Explainable Decision Support Layer
+
+On top of raw findings and recommendations, the dashboard exposes three decision-support capabilities:
+
+- **Reasoning engine** — turns normalized FinOps signals into structured decisions with `root_cause`, `evidence`, `recommended_action`, `action_justification`, `confidence_score`, `risk_score`, `approval_required`, and `next_best_action`
+- **Lightweight forecasting** — projects month-end NEC, waste, unattributed spend, and action-adjusted savings using explainable methods such as month-to-date run rate and trailing moving averages
+- **Action lifecycle tracking** — keeps local/demo recommendation state (`recommended → approved → implemented → verified`) with owner, expected savings, realized savings, and verification notes
+
+This is what makes the project a publishable decision engine rather than only a reporting surface.
 
 ---
 
@@ -437,7 +447,7 @@ The Streamlit dashboard has a home page plus 5 detail pages — run with `make d
 | **Cost Allocation** | Per-team NEC breakdown; commitment utilization (RI/SP) with 100% target line; shared cost distribution by strategy (proportional / even / weighted — Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%); idle commitment waste detail table |
 | **Tagging & Attribution** | Coverage analytics by cloud / service / account; ownership assignment; SLA-based escalation tracker (7-day fix-it SLA); tag quality scoring; enforcement alerts when untagged NEC ≥ 10% |
 | **Waste & Recommendations** | 5-step waste-to-action pipeline: (1) waste breakdown by type and team, (2) cross-cloud inefficiency charts (absolute and relative), (3) prioritised action list with savings estimates, (4) quick wins (low risk, act now), (5) projected before/after impact and scenario comparison |
-| **Cost Intelligence** | AI-driven decision engine: top 3 weekly ROI actions; team decision cards with root cause analysis, evidence, and confidence scores; cost trend by team; anomaly explanations with causal attribution; system reasoning layer transparency |
+| **Cost Intelligence** | Explainable decision engine: top 3 weekly ROI actions; team decision cards with root cause analysis, evidence, confidence, risk, and next-best action; cost trend by team; anomaly explanations with causal attribution; forecast outlook |
 
 > All data is synthetic — cloud distribution does not reflect real-world proportions.
 
@@ -484,12 +494,13 @@ This version is a **local, synthetic-data reference implementation**. It is desi
 | **Synthetic data only** | All billing data is generated — no real AWS/Azure/GCP credentials required or used |
 | **Local execution** | Pipeline runs on DuckDB in-process; production scale-out requires replacing DuckDB with Apache Spark |
 | **Batch only** | No real-time streaming — ingestion is triggered manually or on a weekly GitHub Actions schedule |
+| **No live utilization telemetry** | Real observability feeds and deployment/change events are not yet wired into the recommendation logic |
 | **GCP waste detection** | Relies on `is_unused_reservation` system label, which is only available in the Detailed Usage Export (not Standard Export) |
 | **ML classifier** | Requires sufficient tagged rows as training data; degrades at very low tagging coverage (< 20%) |
 | **No auth / secrets handling** | Production deployments would need cloud credential management (IAM roles, Workload Identity, etc.) |
 | **Azure shared-cost spreading** | Currently done in the dbt intermediate layer; AWS and GCP pass through `tag_team` as-is |
 
-**Future work:** real-time streaming ingestion, PySpark adapter for >50GB datasets, NL query interface over the mart (potential LangGraph integration), cross-cloud RI arbitrage analysis, integration with live observability signals (CloudWatch, Azure Monitor) to strengthen causal reasoning.
+**Future work:** utilization telemetry from CloudWatch / Azure Monitor / GCP Monitoring, deployment/change correlation, unit economics, realized savings validation, production persistence for approval workflows, and ticketing integrations such as Jira or ServiceNow.
 
 ---
 

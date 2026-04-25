@@ -108,6 +108,7 @@ def _labels(team: str | None, env: str) -> str:
         {"key": "application", "value": metadata["application"]},
         {"key": "business_unit", "value": metadata["business_unit"]},
         {"key": "owner_email", "value": metadata["owner_email"]},
+        {"key": "support_group", "value": metadata["support_group"]},
         {"key": "workload_criticality", "value": metadata["workload_criticality"]},
         {"key": "sla_tier", "value": metadata["sla_tier"]},
     ])

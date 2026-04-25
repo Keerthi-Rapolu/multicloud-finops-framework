@@ -32,6 +32,7 @@ def _finding(
     business_unit="product",
     application="core-api",
     owner_email="backend-owner@company.com",
+    support_group="api-operations",
     workload_criticality="high",
     sla_tier="silver",
     is_tagged=True,
@@ -59,6 +60,7 @@ def _finding(
         "business_unit": business_unit,
         "application": application,
         "owner_email": owner_email,
+        "support_group": support_group,
         "workload_criticality": workload_criticality,
         "sla_tier": sla_tier,
         "cpu_util_pct": cpu_util_pct,
@@ -235,6 +237,7 @@ class TestRun:
                 business_unit="engineering",
                 application="platform-core",
                 owner_email="platform-owner@company.com",
+                support_group="platform-operations",
                 workload_criticality="mission_critical",
                 sla_tier="gold",
                 cpu_util_pct=4.0,
@@ -252,6 +255,7 @@ class TestRun:
         assert rec["business_unit"] == "engineering"
         assert rec["application"] == "platform-core"
         assert rec["owner_email"] == "platform-owner@company.com"
+        assert rec["support_group"] == "platform-operations"
         assert rec["cpu_util_pct"] == pytest.approx(4.0)
         assert rec["idle_hours"] == pytest.approx(240.0)
 

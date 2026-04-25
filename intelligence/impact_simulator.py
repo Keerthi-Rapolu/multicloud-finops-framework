@@ -73,6 +73,7 @@ CRITICALITY_RISK_ADJ = {
 }
 
 SLA_RISK_ADJ = {
+    "platinum": 14,
     "gold": 10,
     "silver": 5,
     "bronze": 0,
@@ -172,6 +173,8 @@ def _risk_profile(finding: dict, action: str) -> dict[str, int | str | bool]:
     score += ACTION_RISK_ADJ.get(action, 0)
     if not is_tagged or str(finding.get("allocated_team")) == "unattributed":
         score += 6
+    if str(finding.get("sla_tier") or "").lower() == "platinum":
+        score += 4
     if action in {"resize_down", "remove_resource"} and not telemetry_backed:
         score += 12
     elif action in {"resize_down", "remove_resource"} and telemetry_backed:
@@ -207,8 +210,12 @@ def _risk_profile(finding: dict, action: str) -> dict[str, int | str | bool]:
         reasons.append(f"criticality is {criticality.replace('_', ' ')}")
     if sla_tier == "gold":
         reasons.append("gold SLA coverage increases change sensitivity")
+    if sla_tier == "platinum":
+        reasons.append("platinum SLA coverage requires stronger operational safeguards")
     if not is_tagged or str(finding.get("allocated_team")) == "unattributed":
         reasons.append("ownership/tagging is incomplete, so action needs extra validation")
+    if finding.get("support_group"):
+        reasons.append(f"support group {finding['support_group']} will need to review the change")
     if action == "remove_resource":
         reasons.append("deletion is harder to reverse than billing-only commitment changes")
     elif action == "resize_down":
@@ -375,6 +382,7 @@ def run(waste_findings: list[dict]) -> list[Recommendation]:
             "business_unit",
             "application",
             "owner_email",
+            "support_group",
             "workload_criticality",
             "sla_tier",
             "cpu_util_pct",

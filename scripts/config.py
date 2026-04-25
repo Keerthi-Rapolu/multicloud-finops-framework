@@ -13,26 +13,31 @@ TEAM_METADATA: dict[str, dict[str, str]] = {
         "business_unit": "engineering",
         "application": "platform-core",
         "owner_email": "platform-owner@company.com",
+        "support_group": "platform-operations",
     },
     "data-eng": {
         "business_unit": "data",
         "application": "data-platform",
         "owner_email": "data-eng-owner@company.com",
+        "support_group": "data-platform-ops",
     },
     "frontend": {
         "business_unit": "product",
         "application": "customer-web",
         "owner_email": "frontend-owner@company.com",
+        "support_group": "customer-experience-support",
     },
     "backend": {
         "business_unit": "product",
         "application": "core-api",
         "owner_email": "backend-owner@company.com",
+        "support_group": "api-operations",
     },
     "ml": {
         "business_unit": "ai",
         "application": "ml-platform",
         "owner_email": "ml-owner@company.com",
+        "support_group": "ml-platform-sre",
     },
 }
 
@@ -52,9 +57,9 @@ def infer_workload_criticality(team: str | None, env: str) -> str:
 
 def sla_tier_for_criticality(workload_criticality: str) -> str:
     return {
-        "mission_critical": "gold",
-        "high": "silver",
-        "medium": "bronze",
+        "mission_critical": "platinum",
+        "high": "gold",
+        "medium": "silver",
         "low": "bronze",
     }.get(workload_criticality, "bronze")
 
@@ -67,6 +72,7 @@ def workload_metadata(team: str | None, env: str) -> dict[str, str]:
             "business_unit": "shared-services",
             "application": "unassigned",
             "owner_email": "unassigned-owner@company.com",
+            "support_group": "finops-governance",
         },
     ).copy()
     criticality = infer_workload_criticality(team, env)

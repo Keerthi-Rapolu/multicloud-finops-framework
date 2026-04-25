@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from intelligence.causal_engine import run as run_causal
 from intelligence.forecasting import build_forecast
+from intelligence.reasoning_engine import build_reasoning, from_recommendation
 from intelligence.waste_detector import run as detect_waste
 from intelligence.impact_simulator import run as simulate
 from dashboard._shared import (
@@ -200,10 +201,12 @@ forecast = build_forecast(
 )
 
 st.subheader("Forecast Outlook")
-fc1, fc2, fc3 = st.columns(3)
+fc1, fc2, fc3, fc4, fc5 = st.columns(5)
 fc1.metric("Projected Month-End NEC", f"${forecast.projected_nec:,.0f}")
-fc2.metric("Waste if No Action Taken", f"${forecast.no_action_waste:,.0f}")
-fc3.metric("Savings if Actions Applied", f"${forecast.projected_savings:,.0f}")
+fc2.metric("Next 30 Days NEC", f"${forecast.next_30_days_nec:,.0f}")
+fc3.metric("Waste if No Action Taken", f"${forecast.no_action_waste:,.0f}")
+fc4.metric("Projected Unattributed Spend", f"${forecast.projected_unattributed_spend:,.0f}")
+fc5.metric("Savings if Actions Applied", f"${forecast.projected_savings:,.0f}")
 
 forecast_fig = go.Figure(
     [
@@ -244,7 +247,8 @@ st.plotly_chart(forecast_fig, use_container_width=True)
 st.caption(
     f"{forecast.target_month}: {forecast.method}. "
     f"Forecast uses {forecast.months_of_history} prior month(s) of history. "
-    f"Savings scenario assumes {forecast.savings_basis}."
+    f"Savings scenario assumes {forecast.savings_basis}. "
+    f"Confidence: {forecast.confidence:.0%}. {forecast.reason}"
 )
 
 st.markdown("---")
@@ -355,6 +359,47 @@ if filtered_recs:
     top_rec = max(filtered_recs, key=lambda r: r["estimated_savings"])
     top_rec_action  = top_rec["action"].replace("_", " ").title()
     top_rec_savings = top_rec["estimated_savings"]
+    top_reasoning = from_recommendation(
+        top_rec,
+        nec=float(total_nec),
+        waste_amount=float(recoverable_total),
+        waste_pct=(recoverable_total / total_nec * 100) if total_nec else 0.0,
+        unattributed_spend=float(untagged_nec),
+        unattributed_pct=float(untagged_pct),
+        tagging_coverage_pct=max(0.0, 100.0 - float(untagged_pct)),
+        commitment_utilization_pct=max(0.0, 100.0 - float(commitment_waste_pct)),
+        commitment_waste=float(commitment_waste_total),
+        owner_status="assigned" if top_rec.get("owner_email") else "missing",
+        sla_status="within_sla" if top_rec.get("owner_email") else "breached",
+        trend_direction="up" if avg_change > 0 else "down" if avg_change < 0 else "stable",
+        month_over_month_change_pct=float(avg_change),
+    )
+else:
+    top_reasoning = build_reasoning(
+        {
+            "nec": float(total_nec),
+            "waste_amount": float(recoverable_total),
+            "waste_pct": float(recoverable_total / total_nec * 100) if total_nec else 0.0,
+            "unattributed_spend": float(untagged_nec),
+            "unattributed_pct": float(untagged_pct),
+            "tagging_coverage_pct": max(0.0, 100.0 - float(untagged_pct)),
+            "commitment_utilization_pct": max(0.0, 100.0 - float(commitment_waste_pct)),
+            "commitment_waste": float(commitment_waste_total),
+            "cloud_provider": "multi-cloud",
+            "team": "portfolio",
+            "application": "portfolio",
+            "environment": "prod",
+            "owner_status": "assigned",
+            "sla_status": "within_sla",
+            "trend_direction": "up" if avg_change > 0 else "down" if avg_change < 0 else "stable",
+            "month_over_month_change_pct": float(avg_change),
+            "estimated_savings": float(total_savings),
+            "risk_level": "Low",
+            "confidence_score": 0.82,
+            "risk_score": 20,
+            "recommendation_type": "portfolio_review",
+        }
+    )
 
 n_months = plot_trend["billing_month"].nunique() if not plot_trend.empty else 1
 period   = plot_trend["billing_month"].max() if not plot_trend.empty else "—"
@@ -394,6 +439,19 @@ st.info(
     f"**This month ({period}):**\n\n"
     + "\n".join(summary_lines)
     + f"\n\n**Recommended actions:**\n{action_lines}"
+)
+st.markdown(
+    f"**Decision Title**  \n{top_reasoning['decision_title']}\n\n"
+    f"**Root Cause**  \n{top_reasoning['root_cause']}\n\n"
+    f"**Evidence**  \n- " + "\n- ".join(top_reasoning["evidence"]) + "\n\n"
+    f"**Recommended Action**  \n{top_reasoning['recommended_action']}\n\n"
+    f"**Why this action**  \n{top_reasoning['action_justification']}\n\n"
+    f"**Expected Impact**  \n{top_reasoning['expected_impact']}\n\n"
+    f"**Next Best Action**  \n{top_reasoning['next_best_action']}\n\n"
+    f"**Confidence / Risk**  \n"
+    f"Confidence {top_reasoning['confidence_score']:.0%} - {top_reasoning['confidence_reason']}  \n"
+    f"Risk {top_reasoning['risk_score']}/100 - {top_reasoning['risk_reason']}  \n"
+    f"Approval required: {'Yes' if top_reasoning['approval_required'] else 'No'}"
 )
 
 summary_md = executive_summary_markdown(
@@ -448,6 +506,21 @@ if not _weekly_recs:
 
 if _weekly_recs:
     for i, rec in enumerate(_weekly_recs, 1):
+        reasoning = from_recommendation(
+            rec,
+            nec=float(total_nec),
+            waste_amount=float(recoverable_total),
+            waste_pct=(recoverable_total / total_nec * 100) if total_nec else 0.0,
+            unattributed_spend=float(untagged_nec),
+            unattributed_pct=float(untagged_pct),
+            tagging_coverage_pct=max(0.0, 100.0 - float(untagged_pct)),
+            commitment_utilization_pct=max(0.0, 100.0 - float(commitment_waste_pct)),
+            commitment_waste=float(commitment_waste_total),
+            owner_status="assigned" if (rec.get("action_owner") or rec.get("owner_email")) else "missing",
+            sla_status="within_sla" if (rec.get("action_owner") or rec.get("owner_email")) else "breached",
+            trend_direction="up" if avg_change > 0 else "down" if avg_change < 0 else "stable",
+            month_over_month_change_pct=float(avg_change),
+        )
         team     = _TEAM_LABELS.get(rec["allocated_team"], rec["allocated_team"].replace("-", " ").title())
         act      = rec["action"].replace("_", " ").title()
         effort   = rec.get("effort", "—")
@@ -477,9 +550,10 @@ if _weekly_recs:
             unsafe_allow_html=True,
         )
         st.caption(
-            f"{rec.get('risk_reason', 'Review manually.')} "
-            f"{rec.get('evidence_summary', '')} "
-            f"{rec.get('confidence_reason', '')}"
+            f"Root cause: {reasoning['root_cause']} "
+            f"Evidence: {'; '.join(reasoning['evidence'][:3])}. "
+            f"Why this action: {reasoning['action_justification']} "
+            f"Next best action: {reasoning['next_best_action']}"
         )
 else:
     st.info("No actionable recommendations found for this filter selection.")

@@ -17,6 +17,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from intelligence.impact_simulator import run as simulate
+from intelligence.reasoning_engine import from_recommendation
 from intelligence.waste_detector import run as detect_waste
 from dashboard._shared import (
     ACTION_OPS,
@@ -118,6 +119,12 @@ scope_df = df[
     df["allocated_team"].isin(sel_teams)
     & df["cloud_provider"].isin(sel_clouds)
 ].copy()
+_scope_total_nec = float(scope_df["nec"].sum())
+_scope_commitment_waste = float(scope_df["nec_waste"].sum())
+_scope_commitment_utilization = max(
+    0.0,
+    100.0 - ((_scope_commitment_waste / _scope_total_nec * 100) if _scope_total_nec else 0.0),
+)
 
 filtered_recs = [
     r for r in recs
@@ -127,6 +134,39 @@ filtered_recs = [
     and r["risk"]               in sel_risks
 ] if recs else []
 filtered_recs = overlay_recommendation_actions(filtered_recs)
+
+_scope_untagged_nec = scope_df.loc[~scope_df["is_tagged"].fillna(False), "nec"].sum() if "is_tagged" in scope_df.columns else 0.0
+_scope_untagged_pct = (_scope_untagged_nec / scope_df["nec"].sum() * 100) if scope_df["nec"].sum() else 0.0
+_scope_tagging_coverage = max(0.0, 100.0 - _scope_untagged_pct)
+
+def _owner_status(rec: dict) -> str:
+    owner = str(rec.get("action_owner") or rec.get("owner_email") or "").strip().lower()
+    return "assigned" if owner and "unassigned" not in owner else "missing"
+
+def _sla_status(rec: dict) -> str:
+    return "breached" if _owner_status(rec) != "assigned" else "within_sla"
+
+filtered_recs = [
+    {
+        **rec,
+        "reasoning": from_recommendation(
+            rec,
+            nec=_scope_total_nec,
+            waste_amount=float(rec.get("current_cost", 0.0)),
+            waste_pct=(float(rec.get("current_cost", 0.0)) / _scope_total_nec * 100) if _scope_total_nec else 0.0,
+            unattributed_spend=float(_scope_untagged_nec),
+            unattributed_pct=float(_scope_untagged_pct),
+            tagging_coverage_pct=float(_scope_tagging_coverage),
+            commitment_utilization_pct=_scope_commitment_utilization,
+            commitment_waste=_scope_commitment_waste,
+            owner_status=_owner_status(rec),
+            sla_status=_sla_status(rec),
+            trend_direction="stable",
+            month_over_month_change_pct=0.0,
+        ),
+    }
+    for rec in filtered_recs
+]
 
 # ---------------------------------------------------------------------------
 # KPI row
@@ -407,6 +447,7 @@ else:
         "Owner":         table_df["owner"],
         "Action":        table_df["action_label"],
         "Status":        table_df.get("action_status", pd.Series(["recommended"] * len(table_df))).str.replace("_", " ").str.title(),
+        "Verification":  table_df.get("verification_status", pd.Series(["pending"] * len(table_df))).str.replace("_", " ").str.title(),
         "Effort":        table_df.get("effort", pd.Series(["—"] * len(table_df))),
         "Time to $ Save": table_df.get("time_to_realize", pd.Series(["—"] * len(table_df))),
         "ROI ($/hr)":    table_df.get("roi_score", pd.Series([0.0] * len(table_df))).map("${:,.0f}".format),
@@ -414,6 +455,7 @@ else:
         "Savings %":     table_df["savings_pct"].map("{:.1f}%".format),
         "Approval":      table_df.get("approval_required", pd.Series([False] * len(table_df))).map(lambda x: "Yes" if x else "No"),
         "Safety":        table_df.get("action_safety", pd.Series(["approval_required"] * len(table_df))).str.replace("_", " ").str.title(),
+        "Next Step":     table_df["reasoning"].apply(lambda x: x["next_best_action"]),
         "SLA":           table_df["sla"],
         "Risk":          table_df["risk"],
     })
@@ -519,6 +561,8 @@ else:
         current_status = str(selected_row.get("action_status", "recommended"))
         current_owner = str(selected_row.get("action_owner", selected_row.get("owner_email", "")) or "")
         current_realized = float(selected_row.get("realized_savings", 0.0) or 0.0)
+        current_verification = str(selected_row.get("verification_status", "pending") or "pending")
+        current_notes = str(selected_row.get("verification_notes", "") or "")
         default_impl_date = (
             pd.to_datetime(selected_row["implementation_date"]).date()
             if pd.notna(selected_row.get("implementation_date"))
@@ -543,12 +587,31 @@ else:
                 "Implementation date",
                 value=default_impl_date,
             )
+            verification_cols = st.columns(2)
+            verification_status = verification_cols[0].selectbox(
+                "Verification status",
+                ["pending", "validated", "not_realized"],
+                index=["pending", "validated", "not_realized"].index(current_verification),
+            )
+            verification_notes = verification_cols[1].text_input(
+                "Verification notes",
+                value=current_notes,
+            )
 
             st.caption(
                 f"Risk: {selected_row['risk']} ({selected_row.get('risk_score', 0)}/100) | "
                 f"Approval required: {'Yes' if selected_row.get('approval_required') else 'No'} | "
                 f"Safety: {str(selected_row.get('action_safety', 'approval_required')).replace('_', ' ').title()}"
             )
+            reasoning = selected_row.get("reasoning", {})
+            if reasoning:
+                st.markdown(
+                    f"**Root Cause**  \n{reasoning.get('root_cause', '')}\n\n"
+                    f"**Evidence**  \n- " + "\n- ".join(reasoning.get("evidence", [])) + "\n\n"
+                    f"**Recommended Action**  \n{reasoning.get('recommended_action', '')}\n\n"
+                    f"**Why this action**  \n{reasoning.get('action_justification', '')}\n\n"
+                    f"**Next Best Action**  \n{reasoning.get('next_best_action', '')}"
+                )
             st.caption(
                 f"{selected_row.get('risk_reason', '')} "
                 f"{selected_row.get('evidence_summary', '')} "
@@ -566,6 +629,8 @@ else:
                         if action_status in {"implemented", "verified"}
                         else None,
                         "realized_savings": realized_savings,
+                        "verification_status": verification_status,
+                        "verification_notes": verification_notes,
                     },
                 )
                 st.success("Recommendation state saved.")
@@ -652,6 +717,15 @@ else:
                     f"- **If ignored for 12 months:** ~${rec['estimated_savings'] * 12:,.0f} "
                     "annualised leakage"
                 )
+                reasoning = rec.get("reasoning", {})
+                if reasoning:
+                    st.markdown(
+                        f"**Root Cause**  \n{reasoning.get('root_cause', '')}\n\n"
+                        f"**Evidence**  \n- " + "\n- ".join(reasoning.get("evidence", [])) + "\n\n"
+                        f"**Recommended Action**  \n{reasoning.get('recommended_action', '')}\n\n"
+                        f"**Why this action**  \n{reasoning.get('action_justification', '')}\n\n"
+                        f"**Next Best Action**  \n{reasoning.get('next_best_action', '')}"
+                    )
                 col_a, col_b, col_c = st.columns(3)
                 col_a.metric("Current NEC",       f"${rec['current_cost']:,.0f}")
                 col_b.metric("Estimated Savings", f"${rec['estimated_savings']:,.0f}")

@@ -100,6 +100,7 @@ staged as (
         nullif(trim(lower({{ extract_gcp_label("labels", "business_unit") }})), '') as tag_business_unit,
         nullif(trim(lower({{ extract_gcp_label("labels", "application") }})), '') as tag_application,
         nullif(trim(lower({{ extract_gcp_label("labels", "owner_email") }})), '') as tag_owner_email,
+        nullif(trim(lower({{ extract_gcp_label("labels", "support_group") }})), '') as tag_support_group,
         nullif(trim(lower({{ extract_gcp_label("labels", "workload_criticality") }})), '') as tag_workload_criticality,
         nullif(trim(lower({{ extract_gcp_label("labels", "sla_tier") }})), '') as tag_sla_tier,
 

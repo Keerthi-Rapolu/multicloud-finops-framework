@@ -92,6 +92,7 @@ staged as (
         nullif(trim(lower(json_extract_string(Tags, '$.business_unit'))), '')   as tag_business_unit,
         nullif(trim(lower(json_extract_string(Tags, '$.application'))), '')     as tag_application,
         nullif(trim(lower(json_extract_string(Tags, '$.owner_email'))), '')     as tag_owner_email,
+        nullif(trim(lower(json_extract_string(Tags, '$.support_group'))), '')   as tag_support_group,
         nullif(trim(lower(json_extract_string(Tags, '$.workload_criticality'))), '') as tag_workload_criticality,
         nullif(trim(lower(json_extract_string(Tags, '$.sla_tier'))), '')        as tag_sla_tier,
 

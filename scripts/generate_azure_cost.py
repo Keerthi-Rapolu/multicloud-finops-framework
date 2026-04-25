@@ -115,6 +115,7 @@ def _tags_str(team: str | None, env: str) -> str:
         "application": metadata["application"],
         "business_unit": metadata["business_unit"],
         "owner_email": metadata["owner_email"],
+        "support_group": metadata["support_group"],
         "workload_criticality": metadata["workload_criticality"],
         "sla_tier": metadata["sla_tier"],
     })

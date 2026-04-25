@@ -34,6 +34,7 @@ def _recommendation_frame(recommendations: list[dict]) -> pd.DataFrame:
                 "Environment": rec.get("environment"),
                 "Application": rec.get("application"),
                 "Business Unit": rec.get("business_unit"),
+                "Support Group": rec.get("support_group"),
                 "Workload Criticality": rec.get("workload_criticality"),
                 "SLA Tier": rec.get("sla_tier"),
                 "Evidence Summary": rec.get("evidence_summary"),

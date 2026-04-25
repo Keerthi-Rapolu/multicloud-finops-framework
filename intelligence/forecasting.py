@@ -22,8 +22,13 @@ class ForecastResult:
     no_action_waste: float
     projected_savings: float
     optimized_nec: float
+    next_30_days_nec: float
+    projected_unattributed_spend: float
+    no_action_savings: float
     months_of_history: int
     method: str
+    confidence: float
+    reason: str
     savings_basis: str
     current_month_actual: float
     days_elapsed: int
@@ -105,8 +110,13 @@ def build_forecast(
             no_action_waste=0.0,
             projected_savings=0.0,
             optimized_nec=0.0,
+            next_30_days_nec=0.0,
+            projected_unattributed_spend=0.0,
+            no_action_savings=0.0,
             months_of_history=0,
             method="No billing history available",
+            confidence=0.0,
+            reason="No billing history is available, so the forecast cannot be estimated.",
             savings_basis="none",
             current_month_actual=0.0,
             days_elapsed=0,
@@ -147,6 +157,7 @@ def build_forecast(
         method = "Trailing historical average/trend"
 
     projected_nec = round(max(0.0, projected_nec), 2)
+    next_30_days_nec = round(max(0.0, historical_projection if historical_projection > 0 else projected_nec), 2)
 
     waste_rate = current_waste / current_actual if current_actual > 0 else 0.0
     if waste_rate == 0.0 and not history.empty:
@@ -156,9 +167,39 @@ def build_forecast(
             waste_rate = float(recent["nec_waste"].sum()) / denom
 
     no_action_waste = round(max(0.0, projected_nec * waste_rate), 2)
+    unattributed_actual = float(
+        df.loc[~df.get("is_tagged", pd.Series(False, index=df.index)).fillna(False), "nec"].sum()
+    ) if "is_tagged" in df.columns else 0.0
+    unattributed_rate = unattributed_actual / current_actual if current_actual > 0 else 0.0
+    if unattributed_rate == 0.0 and "is_tagged" in df.columns:
+        recent = df[df["billing_month"].isin(history["billing_month"].tail(3))]
+        recent_nec = float(recent["nec"].sum())
+        if recent_nec > 0:
+            unattributed_rate = float(recent.loc[~recent["is_tagged"].fillna(False), "nec"].sum()) / recent_nec
+    projected_unattributed_spend = round(max(0.0, projected_nec * unattributed_rate), 2)
     projected_savings, savings_basis = _actionable_savings(recommendations)
     projected_savings = round(projected_savings, 2)
     optimized_nec = round(max(0.0, projected_nec - projected_savings), 2)
+    confidence = 0.55
+    if is_current_month and days_elapsed >= max(10, days_in_month // 3) and months_of_history >= 3:
+        confidence = 0.86
+    elif months_of_history >= 3:
+        confidence = 0.8
+    elif months_of_history == 2:
+        confidence = 0.68
+    elif months_of_history == 1:
+        confidence = 0.58
+
+    if is_current_month:
+        reason = (
+            f"Forecast blends month-to-date NEC over {days_elapsed} day(s) with trailing history "
+            f"from {months_of_history} prior month(s)."
+        )
+    else:
+        reason = (
+            f"Forecast uses trailing monthly NEC history from {months_of_history} prior month(s) "
+            "with recent waste and attribution ratios applied to the projected NEC."
+        )
 
     return ForecastResult(
         target_month=target_month,
@@ -166,8 +207,13 @@ def build_forecast(
         no_action_waste=no_action_waste,
         projected_savings=projected_savings,
         optimized_nec=optimized_nec,
+        next_30_days_nec=next_30_days_nec,
+        projected_unattributed_spend=projected_unattributed_spend,
+        no_action_savings=0.0,
         months_of_history=months_of_history,
         method=method,
+        confidence=round(confidence, 2),
+        reason=reason,
         savings_basis=savings_basis,
         current_month_actual=round(current_actual, 2),
         days_elapsed=days_elapsed,

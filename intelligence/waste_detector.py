@@ -95,6 +95,7 @@ _OPTIONAL_METADATA_COLS = [
     "business_unit",
     "application",
     "owner_email",
+    "support_group",
     "workload_criticality",
     "sla_tier",
     "cpu_util_pct",

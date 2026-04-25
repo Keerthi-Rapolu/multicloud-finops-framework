@@ -52,6 +52,8 @@ def test_build_forecast_uses_current_month_run_rate_and_history():
     assert forecast.target_month == "2026-04"
     assert forecast.projected_nec > 120.0
     assert forecast.no_action_waste > 0.0
+    assert forecast.projected_unattributed_spend >= 0.0
+    assert 0.0 <= forecast.confidence <= 1.0
     assert "run rate" in forecast.method.lower()
 
 
@@ -68,3 +70,4 @@ def test_build_forecast_prefers_approved_savings_basis():
     )
     assert forecast.projected_savings == 50.0
     assert forecast.savings_basis == "approved or implemented actions"
+    assert forecast.optimized_nec == forecast.projected_nec - forecast.projected_savings

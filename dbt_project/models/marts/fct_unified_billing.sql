@@ -43,6 +43,7 @@ with aws as (
         cast(null as varchar) as tag_business_unit,
         cast(null as varchar) as tag_application,
         cast(null as varchar) as tag_owner_email,
+        cast(null as varchar) as tag_support_group,
         cast(null as varchar) as tag_workload_criticality,
         cast(null as varchar) as tag_sla_tier,
         is_tagged,
@@ -88,6 +89,7 @@ azure as (
         tag_business_unit,
         tag_application,
         tag_owner_email,
+        tag_support_group,
         tag_workload_criticality,
         tag_sla_tier,
         is_tagged,
@@ -133,6 +135,7 @@ gcp as (
         tag_business_unit,
         tag_application,
         tag_owner_email,
+        tag_support_group,
         tag_workload_criticality,
         tag_sla_tier,
         is_tagged,
@@ -235,6 +238,17 @@ select
         end
     ) as owner_email,
     coalesce(
+        tag_support_group,
+        case allocated_team
+            when 'platform' then 'platform-operations'
+            when 'data-eng' then 'data-platform-ops'
+            when 'frontend' then 'customer-experience-support'
+            when 'backend' then 'api-operations'
+            when 'ml' then 'ml-platform-sre'
+            else 'finops-governance'
+        end
+    ) as support_group,
+    coalesce(
         tag_workload_criticality,
         case
             when coalesce(tag_environment, 'prod') = 'prod' and allocated_team = 'platform' then 'mission_critical'
@@ -254,7 +268,7 @@ select
                     when coalesce(tag_environment, 'prod') in ('staging', 'test', 'qa', 'nonprod') then 'medium'
                     else 'low'
                 end
-            ) = 'mission_critical' then 'gold'
+            ) = 'mission_critical' then 'platinum'
             when coalesce(
                 tag_workload_criticality,
                 case
@@ -263,7 +277,16 @@ select
                     when coalesce(tag_environment, 'prod') in ('staging', 'test', 'qa', 'nonprod') then 'medium'
                     else 'low'
                 end
-            ) = 'high' then 'silver'
+            ) = 'high' then 'gold'
+            when coalesce(
+                tag_workload_criticality,
+                case
+                    when coalesce(tag_environment, 'prod') = 'prod' and allocated_team = 'platform' then 'mission_critical'
+                    when coalesce(tag_environment, 'prod') = 'prod' then 'high'
+                    when coalesce(tag_environment, 'prod') in ('staging', 'test', 'qa', 'nonprod') then 'medium'
+                    else 'low'
+                end
+            ) = 'medium' then 'silver'
             else 'bronze'
         end
     ) as sla_tier
