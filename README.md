@@ -131,7 +131,7 @@ The repository reports evaluation-oriented metrics rather than unsupported produ
 - actionable savings
 - projected savings
 - recommendation counts and actionability rate
-- confidence-weighted / reliability-weighted savings
+- confidence-weighted / quality-adjusted projected savings
 - SLA breach counts
 - forecast confidence and bounded projection ranges
 - forecast backtest error metrics via `fct_forecast_backtest`
@@ -144,6 +144,8 @@ The repository reports evaluation-oriented metrics rather than unsupported produ
 - Python reasoning and forecast layers are deterministic.
 - Tests validate numeric consistency, scoring determinism, and cross-mart invariants.
 - Forecast outputs can be backtested against historical synthetic months.
+- The forecast quality score shown in the dashboard is a heuristic composite support score, not probabilistic confidence.
+- The displayed historical-variance band is derived from recent variance in prior months, not a predictive-model confidence interval.
 - Lifecycle rows can be persisted locally and re-materialized into canonical marts.
 
 ## Limitations
@@ -308,7 +310,7 @@ On top of raw findings and recommendations, the dashboard exposes three decision
 
 - **Reasoning engine** — turns normalized FinOps signals into structured decisions with `root_cause`, `evidence`, `recommended_action`, `action_justification`, `confidence_score`, `risk_score`, `approval_required`, and `next_best_action`
 - **Lightweight forecasting** — projects month-end NEC, commitment waste, unattributed NEC, and action-adjusted savings using explainable methods such as month-to-date run rate and trailing moving averages
-- **Action lifecycle tracking** — keeps local/demo recommendation state (`recommended → approved → implemented → verified`) with owner, expected savings, realized savings, and verification notes
+- **Action lifecycle tracking** — keeps local/demo recommendation state (`recommended → approved/rejected → implemented → verified`) with owner, expected savings, realized savings, and verification notes
 
 This is what makes the project a publishable decision engine rather than only a reporting surface.
 
@@ -536,7 +538,7 @@ The dashboard is designed to support one clear FinOps workflow end to end:
 2. **Understand why it happened** — Waste & Recommendations and Cost Intelligence show evidence, confidence, risk, and the likely operational cause.
 3. **Assign ownership** — Tagging & Attribution identifies gaps and allows owner assignment where direct attribution is missing.
 4. **Choose a safe action** — recommendations carry `risk_score`, `risk_reason`, `approval_required`, and `action_safety`.
-5. **Track the outcome** — the recommendation lifecycle records `recommended -> approved -> implemented -> verified`, with expected and realized savings for demo tracking.
+5. **Track the outcome** — the recommendation lifecycle records `recommended -> approved/rejected -> implemented -> verified`, with expected and realized savings for demo tracking.
 
 ### Demo Story
 

@@ -46,6 +46,10 @@ _TEAM_LABELS_SHORT = {
 st.set_page_config(page_title="Cost Allocation", layout="wide")
 st.title("Cost Allocation")
 st.caption("Who is spending what, and how is shared infrastructure charged back to teams?")
+st.caption(
+    "This page uses the same canonical NEC baseline as Overview and Insights. "
+    "Differences come from shared-cost distribution and team-level allocation views, not from a different source table."
+)
 render_demo_banner()
 
 df, month_filter, selected_cloud = load_scoped_df(render_sidebar=True)
@@ -148,6 +152,10 @@ with col_tbl:
 
 st.markdown("---")
 st.subheader("Commitment utilization (RI / SP)")
+st.caption(
+    "Synthetic dataset tuned to demonstrate near-optimal commitment usage behavior; real environments "
+    "typically show noisier commitment waste."
+)
 
 util = commitment_utilization(df)
 if util.empty:

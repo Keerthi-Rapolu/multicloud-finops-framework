@@ -403,7 +403,8 @@ else:
         st.error(
             f"Top gap: `{w['account_id']}` ({w['cloud_provider'].upper()}) — "
             f"\\${w['unattr_nec']:,.0f} ({w['pct_of_total']:.0f}% of all unattributed NEC){assign_status}. "
-            "Assigning an owner here closes the largest share of the gap in one action."
+            "Assigning an owner here closes the largest share of the gap in one action. "
+            "This share depends on the current month/cloud filter scope."
         )
 
     st.markdown("**Assign teams to top unattributed accounts:**")

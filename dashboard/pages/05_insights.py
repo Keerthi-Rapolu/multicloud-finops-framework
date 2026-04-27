@@ -461,7 +461,9 @@ st.caption(
     f"`0.7 * current_month_run_rate + 0.3 * trailing_3_month_avg_NEC`. "
     f"This is a weighted smoothing model - it does not decompose trend, seasonality, or workload correlation. "
     f"Use it as a directional baseline, not a statistical forecast. "
-    f"Reliability score: {forecast.confidence:.0%} (0.40 * data_quality + 0.35 * signal_strength + 0.25 * historical_stability). "
+    f"Heuristic forecast quality score: {forecast.confidence:.0%} "
+    f"(0.40 * data_quality + 0.35 * signal_strength + 0.25 * historical_stability; "
+    f"this is a composite support score, not probabilistic confidence). "
     f"{forecast.months_of_history} full prior month(s) of history used. "
     f"Savings scenario: {forecast.savings_basis}. {forecast.reason}"
 )
@@ -480,9 +482,9 @@ if _fallback_hier:
     _insights_hier.realization_rate = canonical_metrics.realization_rate or _fallback_hier.realization_rate
 _realized_display = _insights_hier.realized_projection if _insights_hier else forecast.projected_realized_savings
 st.caption(
-    f"Savings pipeline: modeled_opportunity × recovery_rate × actionability_filter × (1 − risk_penalty) "
+    f"Savings pipeline: modeled_opportunity x recovery_rate x actionability_filter x (1 - risk_penalty) "
     f"= best-case actionable (\\${forecast.projected_savings:,.0f}/month). "
-    f"Then × {forecast.realization_rate:.0%} execution rate "
+    f"Then x {forecast.realization_rate:.0%} execution rate "
     f"= realization-adjusted projection \\${_realized_display:,.0f}/month. "
     f"The realization-adjusted number is used consistently in the Decision Summary below."
 )
@@ -492,8 +494,9 @@ st.caption(
 )
 if forecast_source == "canonical":
     st.caption(
-        f"95% CI bounds: \\${forecast.lower_bound:,.0f} – \\${forecast.upper_bound:,.0f} "
-        f"(+/- {forecast.error_bound_pct:.1%} error bound, 1.96 sigma). Source: `marts.fct_month_end_forecast`."
+        f"Heuristic historical-variance band: \\${forecast.lower_bound:,.0f} – \\${forecast.upper_bound:,.0f} "
+        f"(+/- {forecast.error_bound_pct:.1%} derived from recent variance, not predictive-model confidence). "
+        "Source: `marts.fct_month_end_forecast`."
     )
 
 if plot_trend.empty:
@@ -578,11 +581,13 @@ st.caption(
     "**optimization-ready** = attribution coverage >= 80% (enough to act with confidence)."
 )
 st.caption(
-    "Savings hierarchy: **Inefficiency signal** (raw billing-side magnitude) "
-    "→ **Recoverable opportunity** (after recovery rates) "
-    "→ **Best-case actionable** (low/medium risk only) "
-    "→ **Realization-adjusted projection** (× execution rate). "
-    "Each layer is strictly smaller than the previous — never compare across layers."
+    "Savings hierarchy: **Inefficiency signal -> Recoverable opportunity -> Best-case actionable -> "
+    "Realization-adjusted projection**. Each layer is strictly smaller than the previous, so signal size "
+    "should never be read as direct savings."
+)
+st.caption(
+    "Team-level unattributed percentages are independent of the global unattributed percentage because each team "
+    "is measured against its own NEC denominator, not the portfolio NEC total."
 )
 
 # Primary issue: most common root cause across all insights
@@ -663,11 +668,11 @@ summary_lines = [
     f"- **Best-case actionable opportunity: \\${_actionable_sav:,.0f}/month** (low/medium risk, recovery rates applied)",
     f"- **Realization-adjusted projection: \\${total_savings:,.0f}/month** "
     f"(x {canonical_metrics.realization_rate:.0%} execution rate)",
-    f"- **Low-risk quick wins: \\${_low_risk_savings:,.0f}/month** (zero-downtime, no approval required)",
+    f"- **Guaranteed savings: \\${_low_risk_savings:,.0f}/month** (low-risk, no approval required, no downtime)",
 ]
 if untagged_pct >= 10:
     summary_lines.append(
-        f"- **Primary issue: tagging gap** — {untagged_pct:.0f}% of NEC unattributed (\\${untagged_nec:,.0f})"
+        f"- **Primary issue: tagging gap** — {untagged_pct:.1f}% of NEC unattributed (\\${untagged_nec:,.0f})"
     )
     summary_lines.append(
         f"- **Important:** \\${untagged_nec:,.0f} is **not savings** — it is attribution risk that blocks reliable optimization."
@@ -841,7 +846,7 @@ signals: list[dict] = []
 if untagged_pct >= 20:
     signals.append({
         "name":       "Governance gap",
-        "verdict":    f"{untagged_pct:.0f}% of NEC (${untagged_nec:,.0f}) is unattributed.",
+        "verdict":    f"{untagged_pct:.1f}% of NEC (${untagged_nec:,.0f}) is unattributed.",
         "evidence":   f"Derived from {len(scope_df):,} billing rows; `is_tagged=False` on "
                       f"{(~scope_df['is_tagged'].fillna(False)).sum():,} rows.",
         "data_window": f"Current billing period ({period})",
@@ -859,7 +864,7 @@ if untagged_pct >= 20:
 elif untagged_pct >= 10:
     signals.append({
         "name":       "Attribution gap",
-        "verdict":    f"{untagged_pct:.0f}% of NEC (${untagged_nec:,.0f}) lacks explicit attribution.",
+        "verdict":    f"{untagged_pct:.1f}% of NEC (${untagged_nec:,.0f}) lacks explicit attribution.",
         "evidence":   f"Heuristic allocation is compensating on "
                       f"{(~scope_df['is_tagged'].fillna(False)).sum():,} rows.",
         "data_window": f"Current billing period ({period})",
@@ -1151,7 +1156,10 @@ if anomaly_insights:
         likely_cause = _CAUSE_LABELS.get(top_rc["cause"], "unknown") if top_rc else "unknown"
         likely_evidence = top_rc["evidence"] if top_rc else ""
         if likely_cause == "Commitment waste":
-            likely_cause = "Billing-side inefficiency signals, attribution gaps, and possible resource or provisioning changes"
+            likely_cause = (
+                "Billing-side inefficiency signals, attribution gaps, resource-count changes, "
+                "pricing-model shifts, or provisioning changes"
+            )
 
         period_str = f" in {anomaly_month}" if anomaly_month else ""
         st.warning(

@@ -390,6 +390,9 @@ st.caption(
     "and recoverable optimization signals for action planning."
 )
 st.caption(
+    "Formula: inefficiency_score = 0.6 * relative_signal_intensity + 0.4 * absolute_leakage."
+)
+st.caption(
     "Terminology (used consistently across all pages): "
     "**unattributed** = NEC rows with missing `tag_team` (attribution gap); "
     "**unassigned** = recommendations with no saved owner email (accountability gap); "
@@ -429,7 +432,7 @@ with col_chart:
     st.plotly_chart(fig_type, use_container_width=True)
     st.caption(
         "Unused Commitment = billing-confirmed idle RI/SP capacity. "
-        "Idle Compute = billing-side right-sizing candidate (underutilization proxy; "
+        "Idle Compute Proxy = billing-side right-sizing candidate (underutilization proxy; "
         "runtime CPU/memory telemetry confirmation required before acting). "
         "Zombie Resource = near-zero-cost inactive resource. "
         "Underutilized Commitment = commitment utilization below 70%."
@@ -808,6 +811,17 @@ else:
         )
         selected_row = table_df.loc[lifecycle_options[selected_label]]
         current_status = str(selected_row.get("action_status", "recommended"))
+        allowed_transitions = {
+            "recommended": ["recommended", "approved", "rejected"],
+            "approved": ["approved", "rejected", "implemented"],
+            "implemented": ["implemented", "verified"],
+            "verified": ["verified"],
+            "rejected": ["rejected"],
+        }
+        status_options = allowed_transitions.get(
+            current_status,
+            ["recommended", "approved", "rejected", "implemented", "verified"],
+        )
         current_owner = str(selected_row.get("action_owner", selected_row.get("owner_email", "")) or "")
         current_realized = float(selected_row.get("realized_savings", 0.0) or 0.0)
         current_verification = str(selected_row.get("verification_status", "pending") or "pending")
@@ -822,8 +836,8 @@ else:
             lifecycle_cols = st.columns(4)
             action_status = lifecycle_cols[0].selectbox(
                 "Status",
-                ["recommended", "approved", "rejected", "implemented", "verified"],
-                index=["recommended", "approved", "rejected", "implemented", "verified"].index(current_status),
+                status_options,
+                index=status_options.index(current_status),
             )
             action_owner = lifecycle_cols[1].text_input("Action owner", value=current_owner)
             realized_savings = lifecycle_cols[2].number_input(
@@ -844,10 +858,12 @@ else:
                 "Verification status",
                 ["pending", "validated", "not_realized"],
                 index=["pending", "validated", "not_realized"].index(current_verification),
+                disabled=action_status not in {"implemented", "verified"},
             )
             verification_notes = verification_cols[1].text_input(
                 "Verification notes",
                 value=current_notes,
+                disabled=action_status not in {"implemented", "verified"},
             )
 
             st.caption(
@@ -937,7 +953,7 @@ else:
         st.success(
             f"Quick wins: {len(quick_wins)} low-risk actions.\n"
             + "\n".join(summary_parts)
-            + f"\n\nTotal estimated savings: \\${total_qw_savings:,.0f}/month.\n"
+            + f"\n\nTotal projected impact: \\${total_qw_savings:,.0f}/month.\n"
             "No downtime expected. No service interruption or early-exit penalty."
         )
         st.caption("Expand individual actions below for root cause, justification, and alternatives.")
@@ -981,7 +997,7 @@ else:
                     )
                 col_a, col_b, col_c = st.columns(3)
                 col_a.metric("Current NEC",       f"${rec['current_cost']:,.0f}")
-                col_b.metric("Estimated Savings", f"${rec['estimated_savings']:,.0f}")
+                col_b.metric("Projected Impact",  f"${rec['estimated_savings']:,.0f}")
                 col_c.metric("Team",              team)
 
         if len(quick_wins) > 5:

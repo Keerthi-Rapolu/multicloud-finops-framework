@@ -39,6 +39,8 @@ Implemented canonical marts and views now include:
 
 Recommendation confidence is calibrated rather than treated as a fixed heuristic. The current calibration raises confidence when a signal persists across periods or is corroborated by multiple FinOps signals, and applies a penalty when the recommendation is supported only by anomaly-style evidence without broader corroboration.
 
+Forecast quality is also expressed conservatively. The dashboard surfaces a heuristic forecast-quality score and a historical-variance band, but these are explicitly derived from recent billing variance and signal support rather than from a probabilistic predictive model.
+
 ### Novelty of the Implemented System
 
 The publishable contribution is the combination of:
@@ -56,6 +58,7 @@ The publishable contribution is the combination of:
 - The system is explainable decision intelligence, not autonomous remediation.
 - Idle-compute detection is currently billing-proxy based; telemetry-backed CPU/memory validation remains phase 2 work.
 - Real-world action history and realized-savings evidence are not yet available in this repository.
+- The action lifecycle enforces a local/demo state machine of `recommended -> approved/rejected -> implemented -> verified`; it is not a full enterprise workflow engine.
 
 The Streamlit application is only a presentation layer over those outputs.
 

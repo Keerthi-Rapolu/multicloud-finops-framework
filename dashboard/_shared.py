@@ -964,7 +964,7 @@ def diagnose(
         priority: Priority = "P0"
         headline = (
             f"<b>Governance gap:</b> <b>${untagged_nec:,.0f}/month</b> is unattributed because `tag_team` is missing - "
-            f"{untagged_pct:.0f}% of NEC cannot be tied to an accountable team."
+            f"{untagged_pct:.1f}% of NEC cannot be tied to an accountable team."
         )
         color = COLOR_BLOCKER
     elif waste_pct >= 10:
@@ -979,7 +979,7 @@ def diagnose(
         primary = "tagging"
         priority = "P1"
         headline = (
-            f"<b>${untagged_nec:,.0f}</b> of NEC ({untagged_pct:.0f}%) is unattributed - "
+            f"<b>${untagged_nec:,.0f}</b> of NEC ({untagged_pct:.1f}%) is unattributed - "
             "team-level accountability needs improvement."
         )
         color = COLOR_INEFFICIENCY

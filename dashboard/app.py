@@ -263,6 +263,10 @@ fig.update_layout(
     margin=dict(t=10, b=40),
 )
 st.plotly_chart(fig, use_container_width=True)
+st.caption(
+    "All pages use the same canonical NEC baseline from DuckDB. Differences between pages come from "
+    "allocation transformations such as shared-cost distribution, team-level fan-out, and display rounding."
+)
 
 st.markdown("---")
 st.markdown("### Top risks - ordered by priority")
@@ -338,7 +342,7 @@ col_a1, col_a2, col_a3 = st.columns(3)
 def _action_tagging(col) -> None:
     col.error(
         f"**Fix tagging gaps**  \n"
-        f"\\${untagged_nec:,.0f} of NEC is unattributed ({untagged_pct:.0f}% of spend).  \n"
+        f"\\${untagged_nec:,.0f} of NEC is unattributed ({untagged_pct:.1f}% of spend).  \n"
         "This is attribution risk, not direct savings.  \n"
         "Outcome: restores team accountability and makes optimization reliable.  \n"
         "Owner: Platform + FinOps. Risk: Low. SLA: Immediate.  \n"
@@ -358,7 +362,8 @@ def _action_low_risk(col) -> None:
             f"{'Estimated savings (billing proxy):' if is_billing_proxy else 'Estimated savings:'} "
             f"**\\${top_low_risk_optimization_rec['estimated_savings']:,.0f}/month** "
             f"(zero-downtime, no approval required)  \n"
-            f"{len(optimization_low_risk_recs)} low-risk optimization action(s): **\\${low_risk_savings_total:,.0f}/month**  \n"
+            f"Guaranteed savings (no approval, no downtime): **\\${low_risk_savings_total:,.0f}/month**  \n"
+            f"{len(optimization_low_risk_recs)} low-risk optimization action(s) in scope  \n"
             f"{len(governance_low_risk_recs)} governance action(s): improve attribution but do not count as direct savings.  \n"
             f"Risk: Low. SLA: **This week**  \n"
             "See Waste & Recommendations for full list."
@@ -366,7 +371,8 @@ def _action_low_risk(col) -> None:
     else:
         col.success(
             f"**Review low-risk quick wins**  \n"
-            f"{len(optimization_low_risk_recs)} low-risk optimization action(s) — **\\${low_risk_savings_total:,.0f}/month** total  \n"
+            f"Guaranteed savings (no approval, no downtime): **\\${low_risk_savings_total:,.0f}/month**  \n"
+            f"{len(optimization_low_risk_recs)} low-risk optimization action(s) in scope  \n"
             f"{len(governance_low_risk_recs)} governance action(s) improve attribution confidence but do not add direct savings.  \n"
             "Zero-downtime, no approval required.  \n"
             "Waste & Recommendations shows only cost-recovery actions; governance actions are tracked separately."
@@ -433,6 +439,10 @@ with st.expander(
             f"| Automation Readiness | {mat.automation_score:.1f}/5 | {mat.automation_level} |"
         )
     st.info(mat.guidance)
+    st.caption(
+        "Automation readiness stays low in this prototype because actions still require manual validation, "
+        "and runtime telemetry is not yet wired in to support auto-safe execution."
+    )
 
 st.markdown("---")
 
