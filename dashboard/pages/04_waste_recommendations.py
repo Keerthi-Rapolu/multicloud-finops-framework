@@ -1,9 +1,9 @@
 """
-Page 4 — Waste & Recommendations
+Page 4 - Waste & Recommendations
 
-Full waste-to-action pipeline: detects cost waste, explains root causes,
-and surfaces prioritised recommendations with savings estimates and risk scores.
-Flow: Problem → Root Cause → Action → Savings → Risk
+Full waste-to-action pipeline: detects recoverable waste, explains root causes,
+and surfaces prioritized recommendations with savings estimates and risk scores.
+Flow: Problem -> Root Cause -> Action -> Savings -> Risk
 """
 
 import sys
@@ -24,38 +24,83 @@ from dashboard._shared import (
     COLOR_BLOCKER,
     COLOR_INEFFICIENCY,
     COLOR_OPTIMIZED,
+    LABEL_ACTIONABLE_OPPORTUNITY,
     LABEL_ESTIMATED_MONTHLY_SAVINGS,
+    LABEL_UNATTRIBUTED_SPEND,
+    SAVINGS_NOISE_THRESHOLD_USD,
+    SIGNAL_ACTION_MAP,
+    SavingsHierarchy,
+    compute_finops_summary_metrics,
+    compute_savings_hierarchy,
     diagnose,
+    load_canonical_forecast,
+    load_finops_summary,
     enrich_recommendation,
+    load_canonical_recommendations,
     load_scoped_df,
+    normalize_canonical_recommendations,
     overlay_recommendation_actions,
+    render_demo_banner,
     render_headline,
     render_priority_badge,
     save_recommendation_action,
 )
 from dashboard.exporters import jira_action_csv_bytes, recommendation_csv_bytes
+from dashboard.canonical import load_canonical_metrics
 
 _TYPE_COLORS = {
+    "governance_gap":        "#ef4444",
+    "tagging_gap":           "#ef4444",
+    "unattributed_cost_gap": "#ef4444",
+    "commitment_mismatch":   "#2563eb",
+    "commitment_waste":      "#2563eb",
+    "idle_resource":         "#f97316",
+    "idle_compute_proxy":    "#f97316",
+    "zombie_resource":       "#8b5cf6",
     "unused_commitment":        "#ef4444",
     "idle_compute":             "#f97316",
-    "zombie_resource":          "#8b5cf6",
     "underutilized_commitment": "#eab308",
+    "shared_cost_concentration": "#0ea5e9",
+    "cost_anomaly":             "#b45309",
+    "forecasted_month_end_risk": "#7c3aed",
 }
 _TYPE_LABELS = {
+    "governance_gap":        "Governance Gap",
+    "tagging_gap":           "Tagging Gap",
+    "unattributed_cost_gap": "Unattributed Cost Gap",
+    "commitment_mismatch":   "Commitment Mismatch",
+    "commitment_waste":      "Commitment Waste",
+    "idle_resource":         "Right-sizing Candidate",
+    "idle_compute_proxy":    "Right-sizing Candidate",
+    "zombie_resource":       "Zombie Resource",
     "unused_commitment":        "Unused Commitment",
-    "idle_compute":             "Idle Compute",
-    "zombie_resource":          "Zombie Resource",
-    "underutilized_commitment": "Underutilised Commitment",
+    "idle_compute":             "Right-sizing Candidate",
+    "underutilized_commitment": "Underutilized Commitment",
+    "shared_cost_concentration": "Shared Cost Concentration",
+    "cost_anomaly":             "Cost Anomaly",
+    "forecasted_month_end_risk": "Forecasted Month-End Risk",
 }
 _ACTION_COLORS = {
+    "enforce_tags":       "#ef4444",
     "release_commitment": "#2563eb",
     "resize_down":        "#f97316",
     "remove_resource":    "#8b5cf6",
 }
 _ACTION_LABELS = {
+    "enforce_tags":       "Enforce Tags",
     "release_commitment": "Release Commitment",
     "resize_down":        "Resize Down",
     "remove_resource":    "Remove Resource",
+}
+_RECOVERABLE_SIGNAL_TYPES = {
+    "commitment_waste",
+    "commitment_mismatch",
+    "unused_commitment",
+    "underutilized_commitment",
+    "idle_compute_proxy",
+    "idle_resource",
+    "idle_compute",
+    "zombie_resource",
 }
 _TEAM_LABELS = {
     "data-eng":    "Data Engineering",
@@ -68,19 +113,27 @@ _TEAM_LABELS = {
 
 st.set_page_config(page_title="Waste & Recommendations", layout="wide")
 st.title("Waste & Recommendations")
-st.caption("Where is cost leaking, and what should you do about it?")
+st.caption("Where is recoverable cost leaking, and what should you do about it?")
+render_demo_banner()
 
-df, _, _ = load_scoped_df(render_sidebar=True)
+df, month_filter, selected_cloud = load_scoped_df(render_sidebar=True)
+summary_df = load_finops_summary(month_filter)
 
 # Executive headline (Critical #1)
-diag = diagnose(df)
+summary_metrics = compute_finops_summary_metrics(
+    summary_df,
+    clouds=selected_cloud,
+    fallback_df=df,
+)
+canonical_page_metrics = load_canonical_metrics(month_filter, selected_cloud)
+diag = diagnose(df, summary=summary_metrics)
 render_headline(diag)
 
 # ---------------------------------------------------------------------------
 # Run pipeline (cached per DataFrame identity)
 # ---------------------------------------------------------------------------
 
-@st.cache_data(show_spinner="Scanning for waste and simulating impact…")
+@st.cache_data(show_spinner="Scanning for waste and simulating impact...")
 def _run_pipeline(df_hash: int, _df: pd.DataFrame):
     findings = detect_waste(_df)
     recs = simulate(findings)
@@ -89,7 +142,44 @@ def _run_pipeline(df_hash: int, _df: pd.DataFrame):
 # Content-based hash so cache hits when the data is unchanged
 # (id(df) changes on every reload, which defeats the cache).
 _df_hash = int(pd.util.hash_pandas_object(df, index=True).sum())
-findings, recs = _run_pipeline(_df_hash, df)
+canonical_recs_df   = load_canonical_recommendations(month_filter, selected_cloud)
+canonical_forecast_df = load_canonical_forecast(month_filter, selected_cloud)
+# Canonical forecast values — used to keep page 4 and page 5 mathematically consistent.
+_forecast_realization_rate: float | None = None
+_forecast_realized_savings: float | None = None
+_forecast_optimized_nec: float | None = None
+if not canonical_forecast_df.empty:
+    if "realization_rate" in canonical_forecast_df.columns:
+        _forecast_realization_rate = float(canonical_forecast_df["realization_rate"].mean())
+    if "projected_realized_savings_usd" in canonical_forecast_df.columns:
+        _forecast_realized_savings = float(canonical_forecast_df["projected_realized_savings_usd"].sum())
+    if "optimized_month_end_nec" in canonical_forecast_df.columns:
+        _forecast_optimized_nec = float(canonical_forecast_df["optimized_month_end_nec"].sum())
+if not canonical_recs_df.empty:
+    recs = normalize_canonical_recommendations(canonical_recs_df)
+    findings = [
+        {
+            "resource_id": rec.get("resource_id") or f"{rec['allocated_team']}::{rec.get('signal_type', 'issue')}",
+            "cloud_provider": rec["cloud_provider"],
+            "allocated_team": rec["allocated_team"],
+            "waste_type": rec.get("signal_type", rec.get("waste_type", "issue")),
+            "nec_waste": float(rec["current_cost"]) if rec.get("signal_type") in _RECOVERABLE_SIGNAL_TYPES else 0.0,
+            "nec_used": 0.0,
+            "confidence": float(rec["confidence"]),
+        }
+        for rec in recs
+        if rec.get("signal_type") in _RECOVERABLE_SIGNAL_TYPES
+    ]
+    st.caption("Using canonical recoverable-waste recommendation tables from DuckDB.")
+else:
+    findings, recs = _run_pipeline(_df_hash, df)
+    st.caption("Canonical recommendation tables are unavailable for this scope; using the fallback page-local pipeline.")
+
+waste_recs = [
+    r for r in recs
+    if r.get("signal_type") in _RECOVERABLE_SIGNAL_TYPES
+    and float(r.get("estimated_savings", 0.0) or 0.0) >= SAVINGS_NOISE_THRESHOLD_USD
+] if recs else []
 
 # ---------------------------------------------------------------------------
 # Sidebar filters
@@ -97,11 +187,17 @@ findings, recs = _run_pipeline(_df_hash, df)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Page filters")
-st.sidebar.caption("Drill-down only — the global month/cloud filters still apply.")
+st.sidebar.caption("Drill-down only - the global month/cloud filters still apply.")
 
-all_types  = sorted({f["waste_type"]     for f in findings}) if findings else []
-all_teams  = sorted({f["allocated_team"] for f in findings}) if findings else []
-all_clouds = sorted({f["cloud_provider"] for f in findings}) if findings else []
+all_types  = sorted({r.get("waste_type", r.get("signal_type", "issue")) for r in waste_recs}) if waste_recs else sorted({f["waste_type"] for f in findings}) if findings else []
+team_pool = set(df["allocated_team"].fillna("unattributed").astype(str).unique())
+team_pool.update(r["allocated_team"] for r in waste_recs)
+team_pool.update(f["allocated_team"] for f in findings)
+all_teams = sorted(team_pool)
+cloud_pool = set(df["cloud_provider"].fillna("").astype(str).unique())
+cloud_pool.update(r["cloud_provider"] for r in waste_recs)
+cloud_pool.update(f["cloud_provider"] for f in findings)
+all_clouds = sorted(c for c in cloud_pool if c)
 
 sel_types  = st.sidebar.multiselect("Waste type", all_types,  default=all_types)
 sel_teams  = st.sidebar.multiselect("Team",        all_teams,  default=all_teams)
@@ -119,15 +215,26 @@ scope_df = df[
     df["allocated_team"].isin(sel_teams)
     & df["cloud_provider"].isin(sel_clouds)
 ].copy()
-_scope_total_nec = float(scope_df["nec"].sum())
-_scope_commitment_waste = float(scope_df["nec_waste"].sum())
+scope_summary = compute_finops_summary_metrics(
+    summary_df,
+    clouds=sel_clouds,
+    teams=sel_teams,
+    fallback_df=scope_df,
+)
+canonical_metrics = load_canonical_metrics(
+    month_filter,
+    selected_cloud if selected_cloud != "All" else (sel_clouds[0] if len(sel_clouds) == 1 else "All"),
+    teams=sel_teams,
+)
+_scope_total_nec = float(scope_summary.total_nec)
+_scope_commitment_waste = float(scope_summary.total_commitment_waste)
 _scope_commitment_utilization = max(
     0.0,
     100.0 - ((_scope_commitment_waste / _scope_total_nec * 100) if _scope_total_nec else 0.0),
 )
 
 filtered_recs = [
-    r for r in recs
+    r for r in waste_recs
     if r["allocated_team"]      in sel_teams
     and r.get("cloud_provider") in sel_clouds
     and r.get("waste_type")     in sel_types
@@ -135,8 +242,8 @@ filtered_recs = [
 ] if recs else []
 filtered_recs = overlay_recommendation_actions(filtered_recs)
 
-_scope_untagged_nec = scope_df.loc[~scope_df["is_tagged"].fillna(False), "nec"].sum() if "is_tagged" in scope_df.columns else 0.0
-_scope_untagged_pct = (_scope_untagged_nec / scope_df["nec"].sum() * 100) if scope_df["nec"].sum() else 0.0
+_scope_untagged_nec = float(scope_summary.total_unattributed_cost)
+_scope_untagged_pct = (_scope_untagged_nec / _scope_total_nec * 100) if _scope_total_nec else 0.0
 _scope_tagging_coverage = max(0.0, 100.0 - _scope_untagged_pct)
 
 def _owner_status(rec: dict) -> str:
@@ -172,33 +279,63 @@ filtered_recs = [
 # KPI row
 # ---------------------------------------------------------------------------
 
-total_waste_detected = sum(
-    f["nec_waste"] if f["nec_waste"] > 0 else f["nec_used"] for f in filtered_findings
-) if filtered_findings else 0.0
-
-total_nec = scope_df["nec"].sum()
-waste_pct = total_waste_detected / total_nec * 100 if total_nec else 0
-total_savings  = sum(r["estimated_savings"] for r in filtered_recs)
-savings_pct_of_nec = total_savings / total_nec * 100 if total_nec else 0
+total_nec = canonical_metrics.nec or scope_summary.total_nec
+total_commitment_waste = canonical_metrics.commitment_waste or scope_summary.total_commitment_waste
+total_unattributed_cost = canonical_metrics.unattributed_nec or scope_summary.total_unattributed_cost
+recoverable_savings = canonical_metrics.recoverable_savings or scope_summary.total_recoverable_savings or sum(
+    r["estimated_savings"] for r in filtered_recs
+)
+actionable_savings = canonical_metrics.actionable_savings or recoverable_savings
+projected_savings = canonical_metrics.projected_savings or actionable_savings
+savings_pct_of_nec = projected_savings / total_nec * 100 if total_nec else 0
+commitment_waste_pct = total_commitment_waste / total_nec * 100 if total_nec else 0
+unattributed_pct = total_unattributed_cost / total_nec * 100 if total_nec else 0
+total_waste_detected = total_commitment_waste
+waste_pct = commitment_waste_pct
 n_quick_wins   = sum(1 for r in filtered_recs if r["risk"] == "Low")
 
-ck1, ck2, ck3, ck4 = st.columns(4)
-ck1.metric("Waste Detected",      f"${total_waste_detected:,.0f}",
-           delta=f"{waste_pct:.1f}% of NEC", delta_color="inverse")
-ck2.metric(LABEL_ESTIMATED_MONTHLY_SAVINGS, f"${total_savings:,.0f}")
-ck3.metric("Recommendations",     str(len(filtered_recs)))
-ck4.metric("Low-Risk Quick Wins", str(n_quick_wins))
+_n_low  = sum(1 for r in filtered_recs if r.get("risk") == "Low")
+_n_med  = sum(1 for r in filtered_recs if r.get("risk") == "Medium")
+_n_high = sum(1 for r in filtered_recs if r.get("risk") == "High")
 
-# Enterprise scale projection — makes small numbers meaningful
-if total_nec > 0 and total_savings > 0:
-    enterprise_monthly  = 10_000_000
-    enterprise_savings  = enterprise_monthly * (savings_pct_of_nec / 100)
-    st.info(
-        f":scales: **Enterprise scale projection** — at $10M/month cloud spend, "
-        f"this scope implies **{savings_pct_of_nec:.1f}% estimated monthly savings** "
-        f"(**${enterprise_savings:,.0f}/month** at enterprise scale). "
-        f"This environment: **${total_savings:,.0f}/month** identified opportunity."
-    )
+ck1, ck2, ck3, ck4 = st.columns(4)
+ck1.metric(
+    LABEL_UNATTRIBUTED_SPEND,
+    f"${total_unattributed_cost:,.0f}",
+    delta=f"{unattributed_pct:.1f}% of NEC",
+    delta_color="inverse",
+    help="Current-period NEC with missing tag_team attribution in the canonical filter scope.",
+)
+ck2.metric("Commitment Waste", f"${total_commitment_waste:,.0f}",
+           delta=f"{commitment_waste_pct:.1f}% of NEC", delta_color="inverse")
+ck3.metric(
+    "Recommendations",
+    str(len(filtered_recs)),
+    help=(
+        f"Total canonical signals: {len(filtered_recs)}. "
+        f"Low-risk quick wins: {_n_low} (zero-downtime, act now). "
+        f"Medium-risk: {_n_med} (needs approval). "
+        f"High-risk: {_n_high} (excluded from savings estimates)."
+    ),
+)
+ck4.metric(
+    LABEL_ESTIMATED_MONTHLY_SAVINGS,
+    f"${projected_savings:,.0f}",
+    delta=f"best-case: ${actionable_savings:,.0f}",
+    help=(
+        f"Realization-adjusted = best-case actionable (\\${actionable_savings:,.0f}) "
+        f"x {canonical_metrics.realization_rate:.0%} execution probability. "
+        f"Low-risk quick wins only: \\${sum(r['estimated_savings'] for r in filtered_recs if r.get('risk') == 'Low'):,.0f}/month."
+    ),
+)
+st.caption(
+    f"Recommendation counts: **{len(filtered_recs)} total** canonical signals "
+    f"— {_n_low} low-risk (quick wins, no downtime), "
+    f"{_n_med} medium-risk (approval required), "
+    f"{_n_high} high-risk (excluded from projected savings). "
+    f"**Best-case actionable** (\\${actionable_savings:,.0f}) includes low+medium risk. "
+    f"**Realization-adjusted** (\\${projected_savings:,.0f}) applies the {canonical_metrics.realization_rate:.0%} execution rate."
+)
 
 if not filtered_findings:
     st.success(
@@ -207,13 +344,58 @@ if not filtered_findings:
     )
     st.stop()
 
+# ---------------------------------------------------------------------------
+# Savings hierarchy banner — anchored to canonical forecast for cross-page consistency.
+# Use all canonical recs (not just recoverable-waste subset) so actionable matches page 5.
+# ---------------------------------------------------------------------------
+_all_recs_for_banner = (
+    overlay_recommendation_actions(normalize_canonical_recommendations(canonical_recs_df))
+    if not canonical_recs_df.empty else (filtered_recs or [])
+)
+_hier_preview = SavingsHierarchy(
+    inefficiency_signal=canonical_metrics.waste_signal or compute_savings_hierarchy(_all_recs_for_banner, realization_rate=_forecast_realization_rate).inefficiency_signal,
+    recoverable_opportunity=canonical_metrics.recoverable_savings or compute_savings_hierarchy(_all_recs_for_banner, realization_rate=_forecast_realization_rate).recoverable_opportunity,
+    actionable_savings=canonical_metrics.actionable_savings or compute_savings_hierarchy(_all_recs_for_banner, realization_rate=_forecast_realization_rate).actionable_savings,
+    realized_projection=canonical_metrics.projected_savings or compute_savings_hierarchy(_all_recs_for_banner, realization_rate=_forecast_realization_rate).realized_projection,
+    realization_rate=canonical_metrics.realization_rate or (_forecast_realization_rate or 0.70),
+)
+# Anchor realized to the canonical forecast row — removes per-page computation drift.
+if _forecast_realized_savings is not None:
+    _hier_preview.realized_projection = _forecast_realized_savings
+_signal_share = f"{_hier_preview.inefficiency_signal / total_nec * 100:.1f}%" if total_nec else "n/a"
+_realized_share = f"{_hier_preview.realized_projection / total_nec * 100:.1f}%" if total_nec else "n/a"
+st.markdown(
+    f'<div style="background:#eff6ff; border-left:4px solid #2563eb; '
+    f'padding:10px 14px; border-radius:4px; font-size:0.93rem;">'
+    f"{_hier_preview.layer_label_html()}"
+    f"<br/><span style='color:#6b7280; font-size:0.85rem;'>"
+    f"Signal intensity: <b>{_signal_share} of NEC</b> (can exceed 100% — signals overlap; "
+    f"not additive; for example, the same resource can be flagged by both idle-compute and zombie-resource logic) &nbsp;|&nbsp; "
+    f"Realized reduction: <b>{_realized_share} of NEC</b> &nbsp;|&nbsp; "
+    f"Signal &ne; savings &mdash; raw billing problem before recovery rates and risk filters."
+    f"</span></div>",
+    unsafe_allow_html=True,
+)
+
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Step 1 — Where is the waste?
+# Step 1 - Where is the waste
 # ---------------------------------------------------------------------------
 
-st.subheader("Step 1 — Where is the waste?")
+st.subheader("Step 1 - Where is the waste")
+st.caption(
+    "NEC always includes both used cost and embedded waste components. "
+    "This page does not redefine NEC — it breaks NEC into governance blockers, commitment waste, "
+    "and recoverable optimization signals for action planning."
+)
+st.caption(
+    "Terminology (used consistently across all pages): "
+    "**unattributed** = NEC rows with missing `tag_team` (attribution gap); "
+    "**unassigned** = recommendations with no saved owner email (accountability gap); "
+    "**untagged** = resources missing one or more required governance tags. "
+    "These are governance blockers, not recoverable waste — they are excluded from this page's savings estimates."
+)
 
 fdf = pd.DataFrame(filtered_findings)
 fdf["cost_impact"] = fdf.apply(
@@ -242,24 +424,28 @@ with col_chart:
         text=by_type["cost_impact"].map("${:,.0f}".format),
     )
     fig_type.update_traces(textposition="outside")
-    fig_type.update_layout(height=240, margin=dict(t=10, b=40, r=120),
+    fig_type.update_layout(height=240, margin=dict(t=10, b=40, r=160),
                            showlegend=False, yaxis_title=None)
     st.plotly_chart(fig_type, use_container_width=True)
     st.caption(
-        "**Unused Commitment** — billing-confirmed idle RI/SP (highest confidence).  "
-        "**Idle Compute** — very low cost-per-vCPU-hour proxy.  "
-        "**Zombie Resource** — <$2/month total spend.  "
-        "**Underutilised** — <70% RI/SP utilisation ratio."
+        "Unused Commitment = billing-confirmed idle RI/SP capacity. "
+        "Idle Compute = billing-side right-sizing candidate (underutilization proxy; "
+        "runtime CPU/memory telemetry confirmation required before acting). "
+        "Zombie Resource = near-zero-cost inactive resource. "
+        "Underutilized Commitment = commitment utilization below 70%."
     )
 
 with col_actions:
     _action_map = {
+        "commitment_mismatch":      "Release or rebalance commitments",
+        "idle_resource":            "Right-size (billing-side right-sizing candidate — confirm with runtime telemetry)",
+        "zombie_resource":          "Decommission and delete",
         "unused_commitment":        "Release / downsize the commitment",
         "underutilized_commitment": "Partially release commitment",
-        "idle_compute":             "Right-size or suspend instance",
-        "zombie_resource":          "Decommission and delete",
+        "idle_compute":             "Right-size (billing-side right-sizing candidate — confirm with runtime telemetry)",
+        "idle_compute_proxy":       "Right-size (billing-side right-sizing candidate — confirm with runtime telemetry)",
     }
-    for wtype in ["unused_commitment", "underutilized_commitment", "idle_compute", "zombie_resource"]:
+    for wtype in ["commitment_mismatch", "idle_resource", "zombie_resource", "unused_commitment", "underutilized_commitment", "idle_compute"]:
         group = [f for f in filtered_findings if f["waste_type"] == wtype]
         if not group:
             continue
@@ -267,8 +453,8 @@ with col_actions:
         label = _TYPE_LABELS.get(wtype, wtype)
         st.markdown(
             f"**{label}** — {len(group)} finding{'s' if len(group) != 1 else ''}  \n"
-            f"NEC impact: **${total:,.0f}**  \n"
-            f":wrench: {_action_map.get(wtype, 'Review')}"
+            f"NEC impact: **\\${total:,.0f}**  \n"
+            f"Recommended action: {_action_map.get(wtype, 'Review')}"
         )
         st.markdown("")
 
@@ -284,11 +470,14 @@ cloud_waste_map = fdf.groupby("cloud_provider")["cost_impact"].sum().rename("was
 cross = pd.concat([cloud_nec, cloud_waste_map], axis=1).fillna(0).reset_index()
 cross["waste_pct"] = (cross["waste"] / cross["nec"].replace(0, float("nan")) * 100).fillna(0).round(1)
 cross["cloud_label"] = cross["cloud_provider"].str.upper()
+cross["relative_norm"] = cross["waste_pct"] / max(cross["waste_pct"].max(), 1.0)
+cross["absolute_norm"] = cross["waste"] / max(cross["waste"].max(), 1.0)
+cross["combined_score"] = (0.6 * cross["relative_norm"]) + (0.4 * cross["absolute_norm"])
 
 st.subheader("Cross-cloud inefficiency")
 st.caption(
     "Compares absolute waste with waste-as-a-share-of-NEC. A small cloud can still "
-    "be the most *inefficient* — this view surfaces that."
+    "be the most *inefficient* - this view surfaces that."
 )
 
 col_xc1, col_xc2 = st.columns(2)
@@ -305,7 +494,7 @@ with col_xc1:
     fig_xc_abs.update_layout(height=200, margin=dict(t=10, b=30, r=100),
                              showlegend=False, yaxis_title=None)
     st.plotly_chart(fig_xc_abs, use_container_width=True)
-    st.caption("**Absolute** — dollar leakage.")
+    st.caption("**Absolute** - dollar leakage.")
 
 with col_xc2:
     fig_xc_rel = px.bar(
@@ -321,16 +510,18 @@ with col_xc2:
     fig_xc_rel.update_layout(height=200, margin=dict(t=10, b=30, r=80),
                              coloraxis_showscale=False, yaxis_title=None)
     st.plotly_chart(fig_xc_rel, use_container_width=True)
-    st.caption("**Relative** — efficiency; a lower bar = healthier cloud.")
+    st.caption("**Relative** - efficiency; a lower bar = healthier cloud.")
 
 # Callout: worst cloud by relative efficiency
-if not cross.empty and cross["waste_pct"].max() > 0:
-    worst = cross.loc[cross["waste_pct"].idxmax()]
+if not cross.empty and cross["combined_score"].max() > 0:
+    worst = cross.loc[cross["combined_score"].idxmax()]
     if worst["waste_pct"] >= 5:
         st.info(
-            f":mag: **Least efficient cloud: {worst['cloud_label']}** — "
-            f"{worst['waste_pct']:.1f}% of NEC is waste (${worst['waste']:,.0f}). "
-            "Prioritise commitment review here even if it isn't the largest in $ terms."
+            f"Highest combined inefficiency score (current filter selection): **{worst['cloud_label']}** — "
+            f"60% relative signal intensity + 40% absolute leakage. "
+            f"Signal intensity {worst['waste_pct']:.1f}% of NEC — "
+            f"\\${worst['waste']:,.0f} raw billing signal, not all directly recoverable. "
+            "Use the relative chart for efficiency and the absolute chart for dollar scale."
         )
 
 st.markdown("---")
@@ -357,7 +548,7 @@ st.plotly_chart(fig_team, use_container_width=True)
 with st.expander("All waste findings"):
     tbl = fdf.sort_values("cost_impact", ascending=False).reset_index(drop=True)
     disp_tbl = pd.DataFrame({
-        "Resource":   tbl["resource_id"].apply(lambda x: ("…" + str(x)[-35:]) if len(str(x)) > 38 else str(x)),
+        "Resource":   tbl["resource_id"].apply(lambda x: ("..." + str(x)[-35:]) if len(str(x)) > 38 else str(x)),
         "Cloud":      tbl["cloud_provider"].str.upper(),
         "Team":       tbl["team_label"],
         "Waste Type": tbl["waste_type"].map(_TYPE_LABELS).fillna(tbl["waste_type"]),
@@ -369,10 +560,10 @@ with st.expander("All waste findings"):
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Step 2 — What actions recover the most?
+# Step 2 - What actions recover the most
 # ---------------------------------------------------------------------------
 
-st.subheader("Step 2 — What actions recover the most?")
+st.subheader("Step 2 - What actions recover the most")
 
 if not filtered_recs:
     st.info("No recommendations match the current filters.")
@@ -399,34 +590,82 @@ else:
         text=by_action["estimated_savings"].map("${:,.0f}".format),
     )
     fig_action.update_traces(textposition="outside")
-    fig_action.update_layout(height=200, margin=dict(t=10, b=40, r=120),
+    fig_action.update_layout(height=200, margin=dict(t=10, b=40, r=160),
                              showlegend=False, yaxis_title=None)
     st.plotly_chart(fig_action, use_container_width=True)
     st.caption(
-        "**Release Commitment** — release or downsize idle RI/SP.  "
-        "**Resize Down** — right-size idle compute.  "
-        "**Remove Resource** — decommission zombie resources."
+        "**Release Commitment** - release or downsize idle RI/SP.  "
+        "**Resize Down** - right-size idle compute.  "
+        "**Remove Resource** - decommission zombie resources."
     )
+
+    # Signal → Action Mapping reference table — always expanded so it's visible before Step 3
+    with st.expander("Signal → Action mapping table (canonical reference)", expanded=True):
+        st.caption(
+            "This table defines exactly how each signal becomes an action. "
+            "Governance signals (tagging_gap, unattributed_cost_gap) are listed separately — "
+            "they do not produce direct cost savings and must not be ranked against optimization signals."
+        )
+        _opt_signals = [m for m in SIGNAL_ACTION_MAP if m["signal_name"] not in (
+            "tagging_gap", "unattributed_cost_gap", "shared_cost_concentration",
+            "cost_anomaly", "forecasted_month_end_risk",
+        )]
+        _gov_signals = [m for m in SIGNAL_ACTION_MAP if m["signal_name"] in (
+            "tagging_gap", "unattributed_cost_gap", "shared_cost_concentration",
+            "cost_anomaly", "forecasted_month_end_risk",
+        )]
+        st.markdown("**Optimization signals** (direct NEC recovery)")
+        st.dataframe(
+            pd.DataFrame(_opt_signals).rename(columns={
+                "signal_name": "Signal", "trigger_condition": "Trigger",
+                "action": "Action", "expected_impact": "Expected Impact", "risk_model": "Risk",
+            }),
+            use_container_width=True, hide_index=True,
+        )
+        st.markdown("**Governance signals** (accountability / attribution — no direct NEC reduction)")
+        st.dataframe(
+            pd.DataFrame(_gov_signals).rename(columns={
+                "signal_name": "Signal", "trigger_condition": "Trigger",
+                "action": "Action", "expected_impact": "Expected Impact", "risk_model": "Risk",
+            }),
+            use_container_width=True, hide_index=True,
+        )
 
     st.markdown("---")
 
     # ---------------------------------------------------------------------------
-    # Step 3 — Prioritised action list
+    # Step 3 - Prioritised action list
     # ---------------------------------------------------------------------------
 
-    st.subheader("Step 3 — Prioritised action list")
+    st.subheader("Step 3 - Prioritised action list")
 
     col_f, col_s = st.columns([2, 2])
     with col_f:
         min_priority = st.slider(
             "Minimum priority score", min_value=0.0, max_value=100.0,
-            value=0.0, step=5.0, help="priority_score = savings_pct × confidence",
+            value=0.0, step=5.0, help="Canonical priority score normalized to 0-100.",
         )
     with col_s:
         sort_col = st.selectbox(
             "Sort by",
             ["priority_score (desc)", "estimated_savings (desc)", "savings_pct (desc)", "allocated_team"],
         )
+    st.caption(
+        "**Optimization priority score** (0–100): "
+        "35% normalized savings + 25% confidence + 20% governance severity + 10% urgency + 10% low-risk bonus. "
+        "Normalization: `normalized_savings = savings / max_savings_in_scope` (0–1 scale). "
+        "Governance severity here reflects signal quality, NOT the tagging-gap penalty — "
+        "governance actions (enforce_tags, assign_owner) are intentionally excluded from this ranking table."
+    )
+    st.caption(
+        "This page shows only recoverable optimization actions (commitment waste, idle compute, zombie resources). "
+        "Governance gaps (tagging, attribution), anomalies, and forecast risks are surfaced separately in Insights. "
+        "Each row represents one canonical signal/action pair for the current billing scope."
+    )
+    st.caption(
+        "ROI is defined as estimated monthly savings divided by mapped effort hours. "
+        "Examples: enforce tags = 4h, release commitment = 6h, resize down = 12h, remove resource = 8h."
+    )
 
     _SORT_MAP = {
         "priority_score (desc)":    ("priority_score",    False),
@@ -442,14 +681,14 @@ else:
     display_df = pd.DataFrame({
         "Rank":          table_df["Rank"],
         "Resource":      table_df["resource_id"].apply(
-                             lambda x: ("…" + str(x)[-35:]) if len(str(x)) > 38 else str(x)
+                             lambda x: ("..." + str(x)[-35:]) if len(str(x)) > 38 else str(x)
                          ),
         "Owner":         table_df["owner"],
         "Action":        table_df["action_label"],
         "Status":        table_df.get("action_status", pd.Series(["recommended"] * len(table_df))).str.replace("_", " ").str.title(),
         "Verification":  table_df.get("verification_status", pd.Series(["pending"] * len(table_df))).str.replace("_", " ").str.title(),
-        "Effort":        table_df.get("effort", pd.Series(["—"] * len(table_df))),
-        "Time to $ Save": table_df.get("time_to_realize", pd.Series(["—"] * len(table_df))),
+        "Effort":        table_df.get("effort", pd.Series(["-"] * len(table_df))),
+        "Time to Savings": table_df.get("time_to_realize", pd.Series(["-"] * len(table_df))),
         "ROI ($/hr)":    table_df.get("roi_score", pd.Series([0.0] * len(table_df))).map("${:,.0f}".format),
         "Savings":       table_df["estimated_savings"].map("${:,.0f}".format),
         "Savings %":     table_df["savings_pct"].map("{:.1f}%".format),
@@ -526,7 +765,7 @@ else:
             .map(_safety_color, subset=["Safety"])
             .map(_sla_color,    subset=["SLA"])
             .map(_effort_color, subset=["Effort"])
-            .map(_time_color,   subset=["Time to $ Save"]),
+            .map(_time_color,   subset=["Time to Savings"]),
         use_container_width=True, hide_index=True,
     )
 
@@ -542,11 +781,21 @@ else:
                     .map(_safety_color, subset=["Safety"])
                     .map(_sla_color,    subset=["SLA"])
                     .map(_effort_color, subset=["Effort"])
-                    .map(_time_color,   subset=["Time to $ Save"]),
+                    .map(_time_color,   subset=["Time to Savings"]),
                 use_container_width=True, hide_index=True,
             )
 
     st.markdown("**Action lifecycle**")
+    st.caption(
+        "**Unattributed spend vs unassigned owner:** the 'Action owner' field here is the person accountable "
+        "for this specific optimization action — independent of billing attribution. "
+        "Assigning an owner to a recommendation does not reduce the Unattributed Spend metric above, "
+        "which reflects billing rows with a missing `tag_team` tag."
+    )
+    st.caption(
+        "Confidence calibration activates after the first implemented action is verified. "
+        "Until then, scores use canonical signal quality, persistence, corroboration, and anomaly-penalty rules."
+    )
     lifecycle_options = {
         f"{row['Rank']}. {row['action_label']} | {row['allocated_team']} | ${row['estimated_savings']:,.0f}/month": idx
         for idx, row in table_df.head(25).iterrows()
@@ -566,7 +815,7 @@ else:
         default_impl_date = (
             pd.to_datetime(selected_row["implementation_date"]).date()
             if pd.notna(selected_row.get("implementation_date"))
-            else date.today()
+            else None
         )
 
         with st.form("recommendation_lifecycle_form"):
@@ -582,10 +831,13 @@ else:
                 min_value=0.0,
                 value=current_realized,
                 step=10.0,
+                disabled=action_status not in {"implemented", "verified"},
             )
             implementation_date = lifecycle_cols[3].date_input(
                 "Implementation date",
                 value=default_impl_date,
+                help="Set when status is Implemented or Verified. Leave blank for Recommended or Approved.",
+                disabled=action_status not in {"implemented", "verified"},
             )
             verification_cols = st.columns(2)
             verification_status = verification_cols[0].selectbox(
@@ -625,7 +877,7 @@ else:
                         "action_status": action_status,
                         "action_owner": action_owner,
                         "created_date": str(selected_row.get("created_date", date.today().isoformat())),
-                        "implementation_date": implementation_date.isoformat()
+                        "implementation_date": (implementation_date.isoformat() if implementation_date else None)
                         if action_status in {"implemented", "verified"}
                         else None,
                         "realized_savings": realized_savings,
@@ -650,15 +902,15 @@ else:
         mime="text/csv",
     )
 
-    st.caption(f"Showing top {shown} of {total} recommendations (priority ≥ {min_priority:.0f})")
+    st.caption(f"Showing top {shown} of {total} recommendations (priority >= {min_priority:.0f})")
 
     st.markdown("---")
 
     # ---------------------------------------------------------------------------
-    # Step 4 — Quick wins
+    # Step 4 - Quick wins
     # ---------------------------------------------------------------------------
 
-    st.subheader("Step 4 — Quick wins (Low risk, act now)")
+    st.subheader("Step 4 - Quick wins (Low risk, act now)")
 
     quick_wins = sorted([r for r in filtered_recs if r["risk"] == "Low"],
                         key=lambda r: r["priority_score"], reverse=True)
@@ -678,44 +930,45 @@ else:
             act_lbl = _ACTION_LABELS.get(act, act.replace("_", " ").title())
             group_savings = sum(r["estimated_savings"] for r in group)
             summary_parts.append(
-                f"- **{act_lbl}** × {len(group)} — **${group_savings:,.0f}/month**"
+                f"- **{act_lbl}** x {len(group)} — **\\${group_savings:,.0f}/month**"
             )
 
         total_qw_savings = sum(r["estimated_savings"] for r in quick_wins)
         st.success(
-            f"**Quick wins (low risk, {len(quick_wins)} actions):**\n"
+            f"Quick wins: {len(quick_wins)} low-risk actions.\n"
             + "\n".join(summary_parts)
-            + f"\n\n**Total: ${total_qw_savings:,.0f}/month**  \n"
-            "No downtime expected — no service interruption, no early-exit penalty."
+            + f"\n\nTotal estimated savings: \\${total_qw_savings:,.0f}/month.\n"
+            "No downtime expected. No service interruption or early-exit penalty."
         )
         st.caption("Expand individual actions below for root cause, justification, and alternatives.")
 
         for i, rec in enumerate(quick_wins[:5], 1):
             team  = _TEAM_LABELS.get(rec["allocated_team"], rec["allocated_team"].replace("-", " ").title())
             act   = _ACTION_LABELS.get(rec["action"], rec["action"])
-            short = ("…" + rec["resource_id"][-48:]) if len(rec["resource_id"]) > 50 else rec["resource_id"]
+            short = ("..." + rec["resource_id"][-48:]) if len(rec["resource_id"]) > 50 else rec["resource_id"]
+            _qw_is_rs = rec.get("signal_type", rec.get("waste_type", "")) in ("idle_compute", "idle_compute_proxy", "idle_resource")
+            _qw_sav_display = f"up to ${rec['estimated_savings']:,.0f} (billing proxy)" if _qw_is_rs else f"${rec['estimated_savings']:,.0f}"
             with st.expander(
-                f"{i}. **{act}** — `{short}` · **${rec['estimated_savings']:,.0f}** "
-                f"({rec['savings_pct']:.1f}% of current NEC)"
+                f"{i}. {act} - {short} - {_qw_sav_display} "
+                f"({rec['savings_pct']:.1f}% of NEC)"
             ):
-                # "Why this recommendation?" panel (Task #16 — AI explanation mode).
+                # "Why this recommendation" panel (Task #16 — AI explanation mode).
                 # Every quick-win now carries evidence, confidence, data source,
                 # priority score, and the annualized cost of ignoring it.
                 conf = rec.get("confidence", 0.8)
                 conf_label = "high" if conf >= 0.75 else ("medium" if conf >= 0.55 else "low")
+                evidence_summary = rec.get("evidence_summary") or "Canonical decision signal triggered this recommendation."
                 st.markdown(
-                    "**Why this recommendation?**  \n"
-                    f"- **Evidence summary:** {rec.get('evidence_summary', rec['rationale'])}  \n"
-                    f"- **Confidence:** {conf:.0%} ({conf_label})  \n"
-                    f"- **Confidence reason:** {rec.get('confidence_reason', 'Billing signal')}  \n"
-                    f"- **Risk:** {rec['risk']} ({rec.get('risk_score', 0)}/100)  \n"
-                    f"- **Risk reason:** {rec.get('risk_reason', 'Review manually.')}  \n"
-                    f"- **Approval required:** {'Yes' if rec.get('approval_required') else 'No'}  \n"
-                    f"- **Action safety:** {str(rec.get('action_safety', 'approval_required')).replace('_', ' ').title()}  \n"
-                    f"- **Priority score:** {rec['priority_score']:.1f} / 100 "
-                    "(savings_pct × confidence)  \n"
-                    f"- **If ignored for 12 months:** ~${rec['estimated_savings'] * 12:,.0f} "
-                    "annualised leakage"
+                    "Why this recommendation\n"
+                    f"- Evidence summary: {evidence_summary}\n"
+                    f"- Confidence: {conf:.0%} ({conf_label})\n"
+                    f"- Confidence reason: {rec.get('confidence_reason', 'Billing signal')}\n"
+                    f"- Risk: {rec['risk']} ({rec.get('risk_score', 0)}/100)\n"
+                    f"- Risk reason: {rec.get('risk_reason', 'Review manually.')}\n"
+                    f"- Approval required: {'Yes' if rec.get('approval_required') else 'No'}\n"
+                    f"- Action safety: {str(rec.get('action_safety', 'approval_required')).replace('_', ' ').title()}\n"
+                    f"- Priority score: {rec['priority_score']:.1f} / 100\n"
+                    f"- If ignored for 12 months: about \\${rec['estimated_savings'] * 12:,.0f} annualized leakage"
                 )
                 reasoning = rec.get("reasoning", {})
                 if reasoning:
@@ -736,153 +989,230 @@ else:
                 for i, rec in enumerate(quick_wins[5:], 6):
                     team = _TEAM_LABELS.get(rec["allocated_team"], rec["allocated_team"].replace("-", " ").title())
                     act  = _ACTION_LABELS.get(rec["action"], rec["action"])
-                    short = ("…" + rec["resource_id"][-48:]) if len(rec["resource_id"]) > 50 else rec["resource_id"]
+                    short = ("..." + rec["resource_id"][-48:]) if len(rec["resource_id"]) > 50 else rec["resource_id"]
+                    _rem_is_rs = rec.get("signal_type", rec.get("waste_type", "")) in ("idle_compute", "idle_compute_proxy", "idle_resource")
+                    _rem_sav_str = (
+                        f"up to \\${rec['estimated_savings']:,.0f}/month (billing proxy)"
+                        if _rem_is_rs
+                        else f"\\${rec['estimated_savings']:,.0f}/month"
+                    )
                     st.markdown(
-                        f"**{i}. {act}** — `{short}` · {team} · "
-                        f"${rec['estimated_savings']:,.0f}/month · Risk: {rec['risk']}"
+                        f"**{i}. {act}** — `{short}` — {team} — "
+                        f"{_rem_sav_str} — Risk: {rec['risk']}"
                     )
 
     st.markdown("---")
 
     # ---------------------------------------------------------------------------
-    # Step 5 — Projected impact + Before vs After
+    # Step 5 - Probabilistic impact scenarios (Issue #1, #3, #17)
+    # Replaces deterministic "Before vs After" with a 3-scenario model that
+    # reflects actual execution uncertainty. Never shows 100% deterministic NEC
+    # reduction — savings are always probabilistic.
     # ---------------------------------------------------------------------------
 
-    st.subheader("Step 5 — Projected impact if actions applied")
+    st.subheader("Step 5 - Probabilistic impact — three scenarios")
+    st.caption(
+        "Savings are never guaranteed. Each scenario applies a different execution assumption. "
+        "The **expected** scenario uses the realization rate derived from the risk profile of active recommendations. "
+        "Commitment waste reduction shown is commitment-specific only — it does not represent total waste elimination."
+    )
 
-    low_savings        = sum(r["estimated_savings"] for r in filtered_recs if r["risk"] == "Low")
-    low_pct_of_nec     = low_savings / total_nec * 100 if total_nec else 0
-    high_count         = sum(1 for r in filtered_recs if r["risk"] == "High")
+    import plotly.graph_objects as go
 
-    col_low, col_all = st.columns(2)
-    with col_low:
-        st.success(
-            f":white_check_mark: **Low-risk only** — {n_quick_wins} action{'s' if n_quick_wins != 1 else ''}  \n"
-            f"**${low_savings:,.0f}/month** ({low_pct_of_nec:.1f}% of NEC)  \n"
-            f"No service interruption · no early-exit penalty"
-        )
-    with col_all:
-        st.warning(
-            f":scales: **All recommendations** — {len(filtered_recs)} action{'s' if len(filtered_recs) != 1 else ''}  \n"
-            f"**${total_savings:,.0f}/month** ({savings_pct_of_nec:.1f}% of NEC)  \n"
-            f"Includes {high_count} high-risk action(s) — review before proceeding"
-        )
+    # Compute savings hierarchy with same realization rate as Insights forecast page.
+    _fallback_hier = compute_savings_hierarchy(
+        filtered_recs,
+        realization_rate=_forecast_realization_rate,
+    )
+    savings_hier = SavingsHierarchy(
+        inefficiency_signal=canonical_metrics.waste_signal or _fallback_hier.inefficiency_signal,
+        recoverable_opportunity=canonical_metrics.recoverable_savings or _fallback_hier.recoverable_opportunity,
+        actionable_savings=canonical_metrics.actionable_savings or _fallback_hier.actionable_savings,
+        realized_projection=canonical_metrics.projected_savings or _fallback_hier.realized_projection,
+        realization_rate=canonical_metrics.realization_rate or _fallback_hier.realization_rate,
+    )
+    rr = savings_hier.realization_rate
+    confidence_floor = 0.60  # conservative execution floor
 
-    # ---------------------------------------------------------------------------
-    # Scenario Comparison
-    # ---------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("Scenario Comparison")
-    st.caption("How much can you recover, and at what risk level?")
+    low_savings       = sum(r["estimated_savings"] for r in filtered_recs if r["risk"] == "Low")
+    full_savings      = sum(r["estimated_savings"] for r in filtered_recs if r["risk"] in ("Low", "Medium"))
+    high_count        = sum(1 for r in filtered_recs if r["risk"] == "High")
+    full_count        = sum(1 for r in filtered_recs if r["risk"] in ("Low", "Medium"))
+    low_pct_of_nec    = low_savings / total_nec * 100 if total_nec else 0
 
-    qw_savings   = sum(r["estimated_savings"] for r in filtered_recs if r["risk"] == "Low")
-    full_savings  = sum(r["estimated_savings"] for r in filtered_recs if r["risk"] in ("Low", "Medium"))
-    aggr_savings  = total_savings  # all including High
+    # Three scenario NEC outcomes — Expected anchored to canonical forecast for cross-page consistency.
+    sc_best_savings     = savings_hier.actionable_savings    # 100% execution, low/med risk
+    sc_expected_savings = savings_hier.realized_projection   # realization rate applied
+    sc_worst_savings    = savings_hier.realized_projection * confidence_floor  # floor
 
-    qw_count   = sum(1 for r in filtered_recs if r["risk"] == "Low")
-    full_count  = sum(1 for r in filtered_recs if r["risk"] in ("Low", "Medium"))
-    aggr_count  = len(filtered_recs)
+    sc_best_nec = max(0.0, total_nec - sc_best_savings)
+    # Use canonical forecast optimized NEC if available (aligns with Cost Intelligence page).
+    sc_expected_nec = (
+        _forecast_optimized_nec
+        if _forecast_optimized_nec is not None
+        else max(0.0, total_nec - sc_expected_savings)
+    )
+    sc_worst_nec = max(0.0, total_nec - sc_worst_savings)
+
+    sc_best_waste     = max(0.0, total_waste_detected - sc_best_savings)
+    sc_expected_waste = max(0.0, total_waste_detected - sc_expected_savings)
+    sc_worst_waste    = max(0.0, total_waste_detected - sc_worst_savings)
 
     sc1, sc2, sc3 = st.columns(3)
     with sc1:
         st.success(
-            f"**Quick Wins Only**  \n"
-            f"Low-risk actions · {qw_count} recommendations  \n"
-            f"**${qw_savings:,.0f}/month** · **${qw_savings*12:,.0f}/year**  \n"
-            f"No downtime · no approval required  \n"
-            f"Time to realize: **Immediate**"
+            f"**Best case** — 100% execution ({sum(1 for r in filtered_recs if r['risk'] in ('Low','Medium'))} low/med-risk actions).  \n"
+            f"NEC: **\\${sc_best_nec:,.0f}/month** (savings: \\${sc_best_savings:,.0f}/month).  \n"
+            f"Annual savings: \\${sc_best_savings * 12:,.0f}.  \n"
+            "Requires perfect execution, zero rollbacks, zero delays."
         )
     with sc2:
         st.warning(
-            f"**Full Optimization**  \n"
-            f"Low + Medium risk · {full_count} recommendations  \n"
-            f"**${full_savings:,.0f}/month** · **${full_savings*12:,.0f}/year**  \n"
-            f"Some actions need team approval  \n"
-            f"Time to realize: **1–7 days**"
+            f"**Expected** — {rr:.0%} realization rate applied.  \n"
+            f"NEC: **\\${sc_expected_nec:,.0f}/month** (savings: \\${sc_expected_savings:,.0f}/month).  \n"
+            f"Annual savings: \\${sc_expected_savings * 12:,.0f}.  \n"
+            f"Derived from risk profile: {sum(1 for r in filtered_recs if r['risk']=='Low')} low, "
+            f"{sum(1 for r in filtered_recs if r['risk']=='Medium')} medium, "
+            f"{high_count} high-risk actions."
         )
     with sc3:
-        high_count_sc = aggr_count - full_count
         st.error(
-            f"**Aggressive**  \n"
-            f"All risk levels · {aggr_count} recommendations  \n"
-            f"**${aggr_savings:,.0f}/month** · **${aggr_savings*12:,.0f}/year**  \n"
-            f"Includes {high_count_sc} high-risk action(s) — review before acting  \n"
-            f"Time to realize: **up to 1 month**"
+            f"**Conservative** — {rr * confidence_floor:.0%} execution floor applied.  \n"
+            f"NEC: **\\${sc_worst_nec:,.0f}/month** (savings: \\${sc_worst_savings:,.0f}/month).  \n"
+            f"Annual savings: \\${sc_worst_savings * 12:,.0f}.  \n"
+            "Accounts for rollbacks, delays, and partial implementation."
         )
 
-    # Before vs After summary
-    st.markdown("---")
-    st.subheader("Before vs After — if all actions applied")
-
-    waste_after     = max(0, total_waste_detected - total_savings)
-    waste_pct_after = waste_after / total_nec * 100 if total_nec else 0
-    nec_after       = max(0, total_nec - total_savings)
-    waste_improvement_pct = (
-        (total_waste_detected - waste_after) / total_waste_detected * 100
-        if total_waste_detected > 0 else 0
-    )
-    annual_savings  = total_savings * 12
-    annual_low_sav  = low_savings * 12
-
-    col_b, col_a = st.columns(2)
-    with col_b:
-        st.markdown("**Current state**")
-        st.markdown(f"- NEC: **${total_nec:,.0f}/month**")
-        st.markdown(f"- Waste: **${total_waste_detected:,.0f}** ({waste_pct:.1f}% of NEC)")
-        st.markdown(f"- Estimated monthly savings: **${total_savings:,.0f}/month**")
-        st.markdown(f"- Quick wins available: **{n_quick_wins}** low-risk actions")
-    with col_a:
-        st.markdown("**After all recommendations applied**")
-        st.markdown(f"- NEC: **${nec_after:,.0f}/month** (−${total_savings:,.0f})")
-        st.markdown(f"- Waste: **${waste_after:,.0f}** ({waste_pct_after:.1f}% of NEC)")
-        st.markdown(f"- **↓ Waste reduced by {waste_improvement_pct:.0f}%** "
-                    f"({waste_pct:.1f}% → {waste_pct_after:.1f}%)")
-        st.markdown(f"- **Annual savings potential: ${annual_savings:,.0f}**")
-
-    # --- Before vs After bar visual (Medium #7) -----------------------------
-    import plotly.graph_objects as go
-    ba_fig = go.Figure(data=[
-        go.Bar(name="Before", x=["NEC", "Waste"],
-               y=[total_nec, total_waste_detected],
-               marker_color=[COLOR_INEFFICIENCY, COLOR_BLOCKER],
-               text=[f"${total_nec:,.0f}", f"${total_waste_detected:,.0f}"],
-               textposition="outside"),
-        go.Bar(name="After",  x=["NEC", "Waste"],
-               y=[nec_after, waste_after],
-               marker_color=[COLOR_OPTIMIZED, COLOR_INEFFICIENCY],
-               text=[f"${nec_after:,.0f}", f"${waste_after:,.0f}"],
-               textposition="outside"),
+    # 3-scenario bar chart — never deterministic
+    scenario_fig = go.Figure(data=[
+        go.Bar(
+            name="Current (Before)",
+            x=["NEC", "Commitment Waste"],
+            y=[total_nec, total_waste_detected],
+            marker_color=[COLOR_INEFFICIENCY, COLOR_BLOCKER],
+            text=[f"${total_nec:,.0f}", f"${total_waste_detected:,.0f}"],
+            textposition="outside",
+        ),
+        go.Bar(
+            name=f"Best Case (100% exec)",
+            x=["NEC", "Commitment Waste"],
+            y=[sc_best_nec, sc_best_waste],
+            marker_color=["#86efac", "#bbf7d0"],
+            text=[f"${sc_best_nec:,.0f}", f"${sc_best_waste:,.0f}"],
+            textposition="outside",
+        ),
+        go.Bar(
+            name=f"Expected ({rr:.0%} realization)",
+            x=["NEC", "Commitment Waste"],
+            y=[sc_expected_nec, sc_expected_waste],
+            marker_color=[COLOR_OPTIMIZED, "#4ade80"],
+            text=[f"${sc_expected_nec:,.0f}", f"${sc_expected_waste:,.0f}"],
+            textposition="outside",
+        ),
+        go.Bar(
+            name=f"Conservative ({rr * confidence_floor:.0%} floor)",
+            x=["NEC", "Commitment Waste"],
+            y=[sc_worst_nec, sc_worst_waste],
+            marker_color=["#a3e635", "#d9f99d"],
+            text=[f"${sc_worst_nec:,.0f}", f"${sc_worst_waste:,.0f}"],
+            textposition="outside",
+        ),
     ])
-    ba_fig.update_layout(
-        barmode="group", height=260, margin=dict(t=10, b=40),
+    scenario_fig.update_layout(
+        barmode="group",
+        height=320,
+        margin=dict(t=10, b=40),
         yaxis_title="USD / month",
         legend=dict(orientation="h", y=1.12),
     )
-    st.plotly_chart(ba_fig, use_container_width=True)
+    st.plotly_chart(scenario_fig, use_container_width=True)
+    st.caption(
+        "Commitment waste column shows only commitment-specific (RI/SP/CUD) reduction — "
+        "it does not represent total waste elimination. Idle compute and zombie resource "
+        "reductions are captured in the NEC column."
+    )
 
-    # Enhanced summary strip — monthly, annual, % of NEC avoided (Task #7)
-    _nec_pct_avoided = total_savings / total_nec * 100 if total_nec else 0
+    # Summary strip — expected scenario (the authoritative number)
+    _exp_pct = sc_expected_savings / total_nec * 100 if total_nec else 0
+    _best_pct = sc_best_savings / total_nec * 100 if total_nec else 0
     col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-    col_s1.metric("Monthly avoidance",  f"${total_savings:,.0f}")
-    col_s2.metric("Annualised",         f"${annual_savings:,.0f}")
-    col_s3.metric("% of NEC avoided",   f"{_nec_pct_avoided:.1f}%")
-    col_s4.metric("Waste reduction",    f"{waste_improvement_pct:.0f}%",
-                  delta=f"{waste_pct:.1f}% → {waste_pct_after:.1f}%", delta_color="inverse")
+    col_s1.metric(
+        "Realization-adj. Reduction",
+        f"${sc_expected_savings:,.0f}/month",
+        help=f"Best-case actionable (\\${sc_best_savings:,.0f}) x {rr:.0%} realization rate",
+    )
+    col_s2.metric("Annualized Reduction", f"${sc_expected_savings * 12:,.0f}")
+    col_s3.metric(
+        "Reduction as % of NEC",
+        f"{_exp_pct:.1f}%",
+        delta=f"best case: {_best_pct:.1f}%",
+        help="Expected scenario reduction as share of current NEC",
+    )
+    col_s4.metric(
+        "Realization Rate",
+        f"{rr:.0%}",
+        delta=f"floor: {rr * confidence_floor:.0%}",
+        delta_color="off",
+        help="Probability that modeled savings are actually executed. Derived from the risk profile of active recommendations.",
+    )
 
-    # Business impact callout
-    col_low_imp, col_all_imp = st.columns(2)
-    with col_low_imp:
-        st.info(
-            f":white_check_mark: **Low-risk actions only**  \n"
-            f"${low_savings:,.0f}/month · **${annual_low_sav:,.0f}/year**  \n"
-            f"No downtime · no early-exit penalty"
-        )
-    with col_all_imp:
-        if waste_pct > 0:
-            enterprise_before = 10_000_000 * (waste_pct / 100)
-            enterprise_after  = 10_000_000 * (waste_pct_after / 100)
-            st.warning(
-                f":scales: **At $10M/month scale**  \n"
-                f"Waste: ${enterprise_before:,.0f} → ${enterprise_after:,.0f}/month  \n"
-                f"Savings: **${enterprise_before - enterprise_after:,.0f}/month**"
+    # ---------------------------------------------------------------------------
+    # Post-action validation loop (Issue #5, #20)
+    # Closed-loop intelligence: compares realized vs projected and surfaces
+    # calibration gap to improve future realization rate estimates.
+    # ---------------------------------------------------------------------------
+
+    st.markdown("---")
+    st.subheader("Post-Action Validation Loop")
+    st.caption(
+        "This is the feedback loop that makes the system adaptive. Compare realized savings "
+        "against projected savings to calibrate the realization rate for future recommendations."
+    )
+
+    realized_total     = sum(float(r.get("realized_savings", 0.0) or 0.0) for r in filtered_recs)
+    implemented_count  = sum(1 for r in filtered_recs if r.get("action_status") in {"implemented", "verified"})
+    validated_count    = sum(1 for r in filtered_recs if r.get("verification_status") == "validated")
+    not_realized_count = sum(1 for r in filtered_recs if r.get("verification_status") == "not_realized")
+    pending_count      = sum(1 for r in filtered_recs if r.get("verification_status", "pending") == "pending")
+
+    fbl1, fbl2, fbl3, fbl4 = st.columns(4)
+    fbl1.metric("Actions Implemented", str(implemented_count))
+    fbl2.metric("Savings Validated", str(validated_count))
+    fbl3.metric("Not Realized", str(not_realized_count))
+    fbl4.metric(
+        "Realized vs Projected",
+        f"${realized_total:,.0f}",
+        delta=f"projected: ${sc_expected_savings:,.0f}",
+        delta_color="off",
+    )
+
+    if implemented_count > 0:
+        accuracy_pct = (realized_total / sc_expected_savings * 100) if sc_expected_savings > 0 else 0.0
+        calibration_gap = abs(rr * 100 - accuracy_pct)
+        if accuracy_pct >= 85:
+            st.success(
+                f"Validation accuracy: **{accuracy_pct:.0f}%** ({validated_count} verified, "
+                f"{implemented_count} implemented).  \n"
+                f"Realized **\\${realized_total:,.0f}** vs projected **\\${sc_expected_savings:,.0f}**.  \n"
+                f"Realization rate calibration gap: {calibration_gap:.0f}pp. Model is well-calibrated."
             )
+        elif accuracy_pct >= 60:
+            st.warning(
+                f"Validation accuracy: **{accuracy_pct:.0f}%** — realization rate may need adjustment.  \n"
+                f"Realized **\\${realized_total:,.0f}** vs projected **\\${sc_expected_savings:,.0f}** "
+                f"(calibration gap: {calibration_gap:.0f}pp).  \n"
+                "Consider reducing the realization rate assumption for similar risk profiles."
+            )
+        else:
+            st.error(
+                f"Validation accuracy: **{accuracy_pct:.0f}%** — significant under-realization detected.  \n"
+                f"Realized **\\${realized_total:,.0f}** vs projected **\\${sc_expected_savings:,.0f}**.  \n"
+                "Review blocked actions, rollbacks, or missing owner assignments. "
+                "Reduce the realization rate until accuracy recovers above 70%."
+            )
+    else:
+        st.info(
+            "No actions marked as implemented yet.  \n"
+            "Use the **Action Lifecycle** section in Step 3 to track implementation and "
+            "record realized savings. Feedback loop activates once first action is marked implemented."
+        )

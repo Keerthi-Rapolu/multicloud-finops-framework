@@ -90,3 +90,58 @@ def test_from_recommendation_produces_quick_win():
     )
     assert reasoning["priority_score"] > 0
     assert "platform operations" in reasoning["risk_reason"].lower().replace("-", " ")
+
+
+def test_idle_compute_proxy_does_not_reuse_governance_root_cause():
+    reasoning = from_recommendation(
+        {
+            "action": "resize_down",
+            "signal_type": "idle_compute_proxy",
+            "estimated_savings": 90.0,
+            "risk": "Low",
+            "risk_score": 22,
+            "confidence": 0.83,
+            "cloud_provider": "azure",
+            "allocated_team": "backend",
+            "application": "orders-api",
+            "environment": "prod",
+        },
+        nec=1800.0,
+        waste_amount=90.0,
+        waste_pct=5.0,
+        unattributed_spend=950.0,
+        unattributed_pct=52.0,
+        tagging_coverage_pct=48.0,
+        commitment_utilization_pct=82.0,
+        commitment_waste=0.0,
+    )
+    assert "idle" in reasoning["root_cause"].lower() or "oversized" in reasoning["root_cause"].lower()
+    assert "tag" not in reasoning["root_cause"].lower()
+    assert "resize" in reasoning["recommended_action"].lower()
+
+
+def test_zombie_resource_maps_to_inactive_usage_root_cause():
+    reasoning = from_recommendation(
+        {
+            "action": "remove_resource",
+            "signal_type": "zombie_resource",
+            "estimated_savings": 25.0,
+            "risk": "Medium",
+            "risk_score": 45,
+            "confidence": 0.77,
+            "cloud_provider": "gcp",
+            "allocated_team": "ml",
+            "application": "feature-store",
+            "environment": "nonprod",
+        },
+        nec=700.0,
+        waste_amount=25.0,
+        waste_pct=3.6,
+        unattributed_spend=10.0,
+        unattributed_pct=1.4,
+        tagging_coverage_pct=98.6,
+        commitment_utilization_pct=100.0,
+        commitment_waste=0.0,
+    )
+    assert "inactive" in reasoning["root_cause"].lower() or "orphaned" in reasoning["root_cause"].lower()
+    assert "remove" in reasoning["recommended_action"].lower() or "decommission" in reasoning["recommended_action"].lower()

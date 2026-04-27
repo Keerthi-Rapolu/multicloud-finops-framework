@@ -1,20 +1,89 @@
-# Multi-Cloud FinOps Cost Intelligence System
-## Design Document v2.1
+# Multi-Cloud FinOps Decision Engine
+## Design Document v2.2
 
 **Project:** Research Paper + GitHub Demo  
 **Authors:** Keerthi Rapolu + Rishika Naha  
 **Date:** April 2026  
-**Status:** Complete — Phase 1 (Cost Allocation Framework) and Phase 2 (Cost Intelligence Layer) both implemented
+**Status:** Implemented as a post-billing multi-cloud FinOps decision engine with canonical NEC, governance, recommendation, forecast, and action-validation layers
 
 ---
 
-## Project Evolution: Cost Allocation Framework → Cost Intelligence System
+## Project Evolution: Cost Allocation Framework → FinOps Decision Engine
 
 ### Overview
 
-The project began as a multi-cloud cost ingestion, normalization, and attribution framework covering AWS, Azure, and GCP. Phase 1 establishes the financial accuracy and ownership layer; Phase 2 builds an intelligence layer on top that moves the system from *descriptive* (what was spent and by whom) to *prescriptive* (where is waste, why did cost change, and what should be done about it).
+The project began as a multi-cloud cost ingestion, normalization, and attribution framework covering AWS, Azure, and GCP. Phase 1 established the financial accuracy and ownership layer; later phases added deterministic reasoning, canonical FinOps decision tables, recommendation scoring, month-end forecasting, and closed-loop action validation.
 
-Both phases are fully implemented.
+The repository should now be positioned as a **post-billing multi-cloud FinOps decision engine**. It consumes billing, tagging, allocation, NEC, and waste signals after spend occurs, then produces explainable recommendations and validation outputs. It does **not** perform workload-intent modeling, pre-provisioning policy enforcement, runtime autoscaling, spot migration, or LLM/vector-based workload governance.
+
+### Decision-Engine Positioning
+
+This repository is not just a dashboard. Its primary system contribution is the backend decision model:
+
+- one canonical NEC source across AWS, Azure, and GCP
+- one canonical unattributed-cost and tagging-governance source
+- canonical FinOps signal, recommendation, decision, lifecycle, and forecast tables
+- deterministic recommendation scoring based on recoverable savings, confidence, governance severity, urgency, and low-risk bonus
+- closed-loop validation using expected versus realized savings
+
+Implemented canonical marts and views now include:
+
+- `marts.fct_finops_signals`
+- `marts.fct_finops_recommendations`
+- `marts.fct_finops_decisions`
+- `marts.fct_action_lifecycle`
+- `marts.fct_month_end_forecast`
+- `marts.fct_forecast_backtest`
+- `marts.fct_model_accuracy`
+- `marts.fct_finops_decision_metrics`
+
+Recommendation confidence is calibrated rather than treated as a fixed heuristic. The current calibration raises confidence when a signal persists across periods or is corroborated by multiple FinOps signals, and applies a penalty when the recommendation is supported only by anomaly-style evidence without broader corroboration.
+
+### Novelty of the Implemented System
+
+The publishable contribution is the combination of:
+
+- a canonical FinOps decision model that separates waste signal, recoverable savings, actionable savings, and realization-adjusted projected savings
+- explicit signal-to-action mapping instead of page-local recommendation text
+- confidence-calibrated recommendation scoring with auditable components
+- forecast backtesting through a canonical mart rather than projection-only reporting
+- lifecycle and realized-savings readiness through canonical action and model-accuracy tables
+- a reproducible synthetic benchmark that can be rebuilt locally with dbt, DuckDB, and Python tests
+
+### Current Limitations
+
+- The benchmark dataset is synthetic and should not be presented as real enterprise validation.
+- The system is explainable decision intelligence, not autonomous remediation.
+- Idle-compute detection is currently billing-proxy based; telemetry-backed CPU/memory validation remains phase 2 work.
+- Real-world action history and realized-savings evidence are not yet available in this repository.
+
+The Streamlit application is only a presentation layer over those outputs.
+
+### Boundary with Intent-Aware Cloud Governance
+
+This repository is intentionally separate from `intent-aware-cloud-governance`.
+
+**`multicloud-finops-framework` covers:**
+- multi-cloud billing normalization
+- NEC modeling
+- allocation and chargeback
+- tagging and ownership governance
+- waste classification
+- recommendation scoring
+- month-end forecasting
+- action lifecycle validation
+
+**`multicloud-finops-framework` does not cover:**
+- intent vectors or semantic workload embeddings
+- pre-provisioning workload guardrails
+- runtime adaptive scaling
+- spot migration logic
+- vector database or LLM-based workload governance
+- runtime application optimization
+
+System boundary summary:
+- **This repo:** post-billing FinOps accountability and decision support
+- **Intent-aware cloud governance repo:** pre-runtime workload governance and provisioning intelligence
 
 ---
 
@@ -134,9 +203,17 @@ Converts `WasteFinding` objects into prioritised `Recommendation` dicts. Savings
 | `remove_resource` (zombie) | 90% of `nec_used` | Medium | 0.4 |
 | `release_commitment` (underutilized) | 50% of waste signal | Medium | 0.4 |
 
-Priority score formula: `priority_score = estimated_savings × (1 − risk_weight)`
+Priority score formula:
 
-This ranking ensures that high-savings, low-risk actions (e.g., releasing a fully unused RI) surface before high-savings, high-risk actions (e.g., removing a resource that might still be in use). The dashboard renders a before/after projected impact and a scenario comparison (apply all Low-risk vs. apply all actions).
+`priority_score = 0.35 * normalized_savings + 0.25 * confidence + 0.20 * governance_severity + 0.10 * urgency + 0.10 * low_risk_bonus`
+
+Definitions:
+- `normalized_savings = recommendation_savings / max_savings_in_scope`
+- `governance_severity = 1.0` for severe attribution gaps, `0.8` for shared-cost concentration, `0.65` for anomaly or forecast risk, `0.35` for commitment waste, and `0.30` for idle or zombie resource signals, with `+0.10` for missing ownership and `+0.10` for SLA breach
+- `urgency = 0.60 * normalized_waste_growth_rate + 0.40 * normalized_anomaly_score`
+- `low_risk_bonus` is highest for no-downtime, no-approval actions
+
+This ranking ensures that high-savings, high-confidence, low-risk actions surface before noisier or operationally riskier candidates. The Waste page renders only recoverable optimization actions; governance gaps and forecast risks remain in the Insights page.
 
 ---
 
@@ -428,7 +505,7 @@ models/
 2. **Cost Allocation** (`02_allocation.py`) — per-team NEC breakdown; commitment utilization (RI/SP) with 100% target line; shared cost distribution by strategy (proportional / even / weighted — Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%); idle commitment waste detail table; merges former Team Allocation and Shared Costs pages
 3. **Tagging & Attribution** (`03_tagging.py`) — coverage analytics by cloud / service / account; ownership assignment UI; SLA-based escalation tracker (7-day fix-it SLA per unattributed account); tag quality scoring; enforcement alerts when untagged NEC ≥ 10%; merges former Tagging Coverage and Untagged Resources pages
 4. **Waste & Recommendations** (`04_waste_recommendations.py`) — 5-step waste-to-action pipeline: (1) waste breakdown by type (unused_commitment / idle_compute / zombie_resource / underutilized_commitment) and team; (2) cross-cloud inefficiency charts absolute and relative; (3) prioritised action list with estimated savings and risk scores; (4) quick wins (low risk); (5) projected before/after impact with scenario comparison
-5. **Cost Intelligence** (`05_insights.py`) — AI-driven decision engine: top 3 weekly ROI actions; team decision cards with root cause analysis, evidence chains, and confidence scores; cost trend by team with MoM change; anomaly explanations with statistical z-score attribution; system reasoning layer transparency view
+5. **Cost Intelligence** (`05_insights.py`) — decision intelligence engine: top 3 weekly ROI actions; team decision cards with root cause analysis, evidence chains, and confidence scores; cost trend by team with MoM change; anomaly explanations with statistical z-score attribution; system reasoning layer transparency view
 
 ---
 
@@ -669,7 +746,7 @@ Entry point: `run(waste_findings: list[WasteFinding]) → list[Recommendation]`
     "estimated_savings":  float,
     "savings_pct":        float,      # fraction of estimated_waste recoverable
     "risk":               str,        # 'Low' | 'Medium' | 'High'
-    "priority_score":     float,      # estimated_savings × (1 − risk_weight)
+    "priority_score":     float,      # canonical weighted score from savings, confidence, governance severity, urgency, and low-risk bonus
     "rationale":          str,        # 1–2 sentence justification
     "cloud_provider":     str,
     "service_category":   str,

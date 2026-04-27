@@ -1,0 +1,2 @@
+recommendation_id,action_status,created_date,approved_at,implementation_date,verified_at,action_owner,expected_savings,realized_savings,verification_status,verification_notes,realization_rate
+rec-1,implemented,2026-04-24,,2026-04-24,,finops@company.com,0.0,42.0,pending,,0.0

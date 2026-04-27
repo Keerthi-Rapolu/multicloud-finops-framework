@@ -22,10 +22,14 @@ from dashboard._shared import (
     COLOR_OPTIMIZED,
     LABEL_UNATTRIBUTED_SPEND,
     apply_owner_assignments,
+    compute_finops_summary_metrics,
     diagnose,
+    load_finops_summary,
     load_scoped_df,
+    render_demo_banner,
     render_headline,
 )
+from dashboard.canonical import load_canonical_metrics
 
 _ASSIGNMENTS_FILE = Path(__file__).resolve().parents[2] / "data" / "team_assignments.json"
 _KNOWN_TEAMS = ["data-eng", "platform", "frontend", "backend", "ml"]
@@ -77,10 +81,18 @@ st.title("Tagging & Attribution")
 st.caption(
     "Governance control layer - coverage analytics, ownership assignment, and SLA tracking."
 )
+render_demo_banner()
 
-df, _, _ = load_scoped_df(render_sidebar=True)
+df, month_filter, selected_cloud = load_scoped_df(render_sidebar=True)
+summary_df = load_finops_summary(month_filter)
+summary_metrics = compute_finops_summary_metrics(
+    summary_df,
+    clouds=selected_cloud,
+    fallback_df=df,
+)
+canonical_metrics = load_canonical_metrics(month_filter, selected_cloud)
 
-diag = diagnose(df)
+diag = diagnose(df, summary=summary_metrics)
 render_headline(diag)
 
 notice = st.session_state.pop("tagging_assignment_notice", None)
@@ -124,9 +136,12 @@ auto_attr = df_assigned["allocated_team"].fillna("unattributed") != "unattribute
 manual_attr = df_assigned["is_manually_assigned"].fillna(False)
 is_attributable = (auto_attr | manual_attr) if adjusted else is_tagged
 
-total_nec = df_assigned["nec"].sum()
-attributed_nec = df_assigned.loc[is_attributable, "nec"].sum()
-unattributed_nec = total_nec - attributed_nec
+total_nec = canonical_metrics.nec or summary_metrics.total_nec
+unattributed_nec = (
+    canonical_metrics.unattributed_nec or summary_metrics.total_unattributed_cost
+    if not adjusted else float(df_assigned.loc[~is_attributable, "nec"].sum())
+)
+attributed_nec = max(0.0, total_nec - unattributed_nec)
 attributed_pct = attributed_nec / total_nec * 100 if total_nec else 0.0
 unattributed_pct = 100 - attributed_pct
 
@@ -144,6 +159,17 @@ c1.metric(
 c2.metric("Attributed $", f"${attributed_nec:,.0f}")
 c3.metric(LABEL_UNATTRIBUTED_SPEND, f"${unattributed_nec:,.0f}", delta_color="inverse")
 c4.metric("Owners Assigned", str(len(_assigned_map)), delta=f"{len(_assigned_map)} accounts mapped")
+st.caption(
+    "Owner assignments in this synthetic demo are local mappings saved from the dashboard. "
+    "No preloaded persisted assignments are included by default. "
+    "Assignment improves operational routing, but it does not change billing attribution until the underlying tags are fixed."
+)
+if not _assigned_map:
+    st.info(
+        "**Demo state:** No owner assignments are preloaded. "
+        "Use the **Assign Owner Now** section below to map accounts to teams — "
+        "assignments persist locally and immediately update the Owners Assigned count and the Adjusted attribution view."
+    )
 
 if adjusted:
     raw_pct = df_assigned.loc[is_tagged, "nec"].sum() / total_nec * 100 if total_nec else 0.0
@@ -163,12 +189,12 @@ if adjusted:
 
 if unattributed_pct >= 20:
     st.error(
-        f"HIGH - {unattributed_pct:.1f}% of NEC (${unattributed_nec:,.0f}) is unattributed. "
+        f"HIGH — {unattributed_pct:.1f}% of NEC (\\${unattributed_nec:,.0f}) is unattributed. "
         "Use the Assign Owner section below to close the gap. Target: <5% within 60 days."
     )
 elif unattributed_pct >= 10:
     st.warning(
-        f"MEDIUM - {unattributed_pct:.1f}% of NEC (${unattributed_nec:,.0f}) is unattributed. "
+        f"MEDIUM — {unattributed_pct:.1f}% of NEC (\\${unattributed_nec:,.0f}) is unattributed. "
         "See the Assign Owner section below."
     )
 else:
@@ -249,6 +275,10 @@ st.markdown("---")
 # ---------------------------------------------------------------------------
 
 st.subheader("Coverage by cloud")
+st.caption(
+    "All clouds with billing data are shown. A cloud missing from the chart means it has no rows "
+    "in the selected billing scope — adjust the global month/cloud filter to include it."
+)
 
 df_view = df_assigned.assign(is_attr=is_attributable)
 by_cloud = (
@@ -371,8 +401,8 @@ else:
         )
         assign_status = f" (currently -> **{currently_assigned}**)" if currently_assigned else " (unassigned)"
         st.error(
-            f"Top gap: `{w['account_id']}` ({w['cloud_provider'].upper()}) - "
-            f"${w['unattr_nec']:,.0f} ({w['pct_of_total']:.0f}% of all unattributed NEC){assign_status}. "
+            f"Top gap: `{w['account_id']}` ({w['cloud_provider'].upper()}) — "
+            f"\\${w['unattr_nec']:,.0f} ({w['pct_of_total']:.0f}% of all unattributed NEC){assign_status}. "
             "Assigning an owner here closes the largest share of the gap in one action."
         )
 
@@ -549,8 +579,8 @@ else:
     if not escalations.empty:
         esc_nec = escalations["unattr_nec"].sum()
         st.error(
-            f"{len(escalations)} account(s) are past the 7-day SLA - "
-            f"${esc_nec:,.0f} NEC has been unattributed for >7 days. "
+            f"{len(escalations)} account(s) are past the 7-day SLA — "
+            f"\\${esc_nec:,.0f} NEC has been unattributed for >7 days. "
             "Use the Assign Owner form above to resolve immediately."
         )
 
@@ -581,8 +611,8 @@ if not unattr_df.empty:
         status_str = f"Assigned -> **{currently}**" if currently else "**Not yet assigned**"
         if w_pct >= 15:
             st.error(
-                f"Single biggest gap: `{w['account_id']}` ({w['cloud_provider'].upper()}) - "
-                f"${w['unattr_nec']:,.0f} ({w_pct:.0f}% of all unattributed NEC). {status_str}"
+                f"Single biggest gap: `{w['account_id']}` ({w['cloud_provider'].upper()}) — "
+                f"\\${w['unattr_nec']:,.0f} ({w_pct:.0f}% of all unattributed NEC). {status_str}"
             )
 
 if not unattr_df.empty:

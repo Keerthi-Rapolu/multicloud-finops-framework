@@ -8,6 +8,7 @@ test class at the bottom is skipped when finops_dbt.duckdb is absent.
 
 import math
 from pathlib import Path
+import shutil
 
 import pandas as pd
 import pytest
@@ -611,9 +612,16 @@ _DB_PATH = Path(__file__).resolve().parents[1] / "finops_dbt.duckdb"
 )
 class TestIntegration:
     @pytest.fixture(scope="class")
-    def df(self):
+    def db_copy(self, tmp_path_factory):
+        db_dir = tmp_path_factory.mktemp("waste_detector_db")
+        db_copy = db_dir / "finops_dbt.duckdb"
+        shutil.copy2(_DB_PATH, db_copy)
+        return db_copy
+
+    @pytest.fixture(scope="class")
+    def df(self, db_copy):
         import duckdb
-        con = duckdb.connect(str(_DB_PATH), read_only=True)
+        con = duckdb.connect(str(db_copy), read_only=True)
         df = con.execute("SELECT * FROM marts.fct_unified_billing").df()
         con.close()
         return df

@@ -117,7 +117,7 @@ def executive_summary_markdown(
         f"- Net Effective Cost (NEC): ${total_nec:,.0f}/month",
         f"- Unattributed Spend: ${unattributed_spend:,.0f}/month",
         f"- Waste: ${waste:,.0f}/month",
-        f"- Estimated Monthly Savings: ${estimated_savings:,.0f}/month",
+        f"- Realization-adjusted Monthly Savings: ${estimated_savings:,.0f}/month",
         "",
         f"## Forecast ({forecast_month})",
         f"- Projected month-end NEC: ${forecast_nec:,.0f}",

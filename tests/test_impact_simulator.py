@@ -279,8 +279,16 @@ class TestRun:
 
     def test_priority_score_formula(self):
         rec = run([_finding(waste_type="unused_commitment", nec_waste=10.0, nec_used=10.0, confidence=0.95)])[0]
-        expected_pct = 10.0 / 20.0 * 100
-        expected_priority = round(expected_pct * 0.95, 4)
+        expected_priority = round(
+            (
+                0.35 * 1.0
+                + 0.25 * 0.95
+                + 0.20 * 0.35
+                + 0.10 * 0.0
+                + 0.10 * 0.0
+            ) * 100.0,
+            2,
+        )
         assert rec["priority_score"] == pytest.approx(expected_priority, rel=1e-3)
 
     def test_action_safety_and_risk_reason_present(self):

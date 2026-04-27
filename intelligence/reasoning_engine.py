@@ -77,6 +77,7 @@ def build_reasoning(inp: ReasoningInput) -> DecisionReasoning:
     owner_status = str(inp.get("owner_status", "assigned"))
     sla_status = str(inp.get("sla_status", "within_sla"))
     recommendation_type = str(inp.get("recommendation_type", "review"))
+    signal_type = str(inp.get("signal_type", inp.get("waste_type", ""))).lower()
     cloud_provider = str(inp.get("cloud_provider", "multi-cloud")).upper()
     team = str(inp.get("team", "unattributed")).replace("-", " ").title()
     application = str(inp.get("application", "unassigned")).replace("-", " ")
@@ -94,7 +95,83 @@ def build_reasoning(inp: ReasoningInput) -> DecisionReasoning:
     expected_impact = "Reduces avoidable cloud spend."
     next_best_action = "Validate the next highest-priority recommendation."
 
-    if unattributed_pct >= 50:
+    if signal_type in {"governance_gap", "tagging_gap", "unattributed_cost_gap"}:
+        issue_type = "tagging_governance_gap"
+        decision_title = "Fix ownership and tagging gaps before deeper optimization"
+        root_cause = (
+            f"Spend in {cloud_provider} cannot be allocated cleanly because required owner, team, "
+            "cost center, or environment tags are missing."
+        )
+        evidence = [
+            f"Signal `{signal_type}` is active for the selected scope",
+            f"${unattributed_spend:,.0f} remains unattributed",
+            f"Tagging coverage is {max(0.0, 100 - unattributed_pct):.0f}%",
+        ]
+        recommended_action = "Enforce required ownership and allocation tags, then assign owners to the highest-cost accounts."
+        action_justification = (
+            "Governance gaps are blocking accurate attribution and reliable optimization. "
+            "Fixing tags and ownership improves chargeback accuracy first."
+        )
+        confidence_score = max(confidence_score, 0.88)
+        risk_score = min(risk_score, 20)
+        risk_reason = "Low operational risk because governance fixes do not change runtime workload behavior."
+        approval_required = False
+        expected_impact = "Improves attribution accuracy and unblocks accountable optimization."
+        next_best_action = "Assign owners for the top unattributed accounts and enforce tags at creation."
+    elif signal_type in {"commitment_waste", "commitment_mismatch", "unused_commitment", "underutilized_commitment"}:
+        issue_type = "commitment_mismatch"
+        decision_title = "Re-balance commitments before the next billing cycle"
+        root_cause = (
+            f"Reserved capacity is underutilized for {team} in {environment}, leaving idle RI/SP/CUD capacity on the books."
+        )
+        evidence = [
+            f"Signal `{signal_type}` is active for the selected scope",
+            f"${commitment_waste:,.0f} of commitment waste detected",
+            f"Commitment utilization is {commitment_utilization_pct:.1f}%",
+        ]
+        recommended_action = "Release, reduce, or re-balance commitments for the affected scope."
+        action_justification = (
+            "The waste signal comes from direct billing commitment fields, so the fastest value comes from matching "
+            "coverage to observed demand."
+        )
+        confidence_score = max(confidence_score, 0.86)
+        expected_impact = "Reduces unused commitment cost without waiting for application changes."
+        next_best_action = "Review commitment coverage by environment and shift commitments away from low-demand workloads."
+    elif signal_type in {"idle_resource", "idle_compute_proxy", "idle_compute"}:
+        issue_type = "optimization_opportunity"
+        decision_title = "Right-size low-utilization compute"
+        root_cause = (
+            "A billing-side idle-compute proxy indicates the resource is oversized relative to current spend and demand patterns."
+        )
+        evidence = [
+            f"Signal `{signal_type}` is active for the selected scope",
+            f"Estimated monthly savings are ${estimated_savings:,.0f}",
+            f"Waste signal is {waste_pct:.1f}% of NEC for this recommendation",
+        ]
+        recommended_action = "Resize the resource down to a smaller instance class and validate service health after the change."
+        action_justification = (
+            "The recommendation is based on billing-side inefficiency, not runtime telemetry, so it should be treated as a conservative right-sizing candidate."
+        )
+        expected_impact = "Reduces provisioned compute cost while preserving workload availability."
+        next_best_action = "Validate post-change NEC and continue with the next low-risk right-sizing action."
+    elif signal_type in {"zombie_resource"}:
+        issue_type = "optimization_opportunity"
+        decision_title = "Remove inactive billable resources"
+        root_cause = (
+            "The resource shows no meaningful usage or only near-zero residual cost, which is consistent with an orphaned or inactive billable artifact."
+        )
+        evidence = [
+            f"Signal `{signal_type}` is active for the selected scope",
+            f"Estimated monthly savings are ${estimated_savings:,.0f}",
+            "The resource appears inactive from billing evidence",
+        ]
+        recommended_action = "Review the resource owner, then decommission and remove the inactive asset."
+        action_justification = (
+            "Zombie-resource actions should remove residual spend only after owner validation, because billing evidence suggests the resource is no longer serving production demand."
+        )
+        expected_impact = "Eliminates avoidable residual spend tied to inactive resources."
+        next_best_action = "Verify the asset is no longer referenced, then delete and track realized savings next month."
+    elif unattributed_pct >= 50:
         issue_type = "tagging_governance_gap"
         decision_title = "Fix unattributed spend before deeper optimization"
         root_cause = (
@@ -265,6 +342,7 @@ def from_recommendation(
             trend_direction=trend_direction,
             month_over_month_change_pct=float(month_over_month_change_pct),
             recommendation_type=str(recommendation.get("action", "review")),
+            signal_type=str(recommendation.get("signal_type", recommendation.get("waste_type", ""))),
             estimated_savings=float(recommendation.get("estimated_savings", 0.0)),
             risk_level=str(recommendation.get("risk", "Low")),
             confidence_score=float(recommendation.get("confidence", 0.75)),

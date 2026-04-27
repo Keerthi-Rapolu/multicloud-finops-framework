@@ -13,6 +13,12 @@ from __future__ import annotations
 import hashlib
 
 from intelligence import Recommendation
+from intelligence.scoring import (
+    governance_severity_score,
+    low_risk_bonus_score,
+    normalize_savings,
+    priority_score as canonical_priority_score,
+)
 
 
 ACTION_MAP: dict[str, str] = {
@@ -337,6 +343,14 @@ def _recommendation_id(finding: dict, action: str) -> str:
 
 def run(waste_findings: list[dict]) -> list[Recommendation]:
     recs: list[Recommendation] = []
+    savings_candidates: list[float] = []
+
+    for finding in waste_findings:
+        estimated_savings, _ = estimate_savings(finding)
+        if estimated_savings >= _MIN_SAVINGS:
+            savings_candidates.append(estimated_savings)
+
+    max_savings_in_scope = max(savings_candidates) if savings_candidates else 1.0
 
     for finding in waste_findings:
         estimated_savings, savings_pct = estimate_savings(finding)
@@ -349,6 +363,20 @@ def run(waste_findings: list[dict]) -> list[Recommendation]:
         time_to_realize = TIME_MAP.get(action, "1 week")
         roi_score = round((estimated_savings * 12) / _EFFORT_HOURS[effort], 2)
         profile = _risk_profile(finding, action)
+        normalized_savings = normalize_savings(estimated_savings, max_savings_in_scope)
+        governance_severity = governance_severity_score(str(finding.get("waste_type", "")))
+        low_risk_bonus = low_risk_bonus_score(
+            risk_score_value=int(profile["risk_score"]),
+            approval_required=bool(profile["approval_required"]),
+            action_type=action,
+        )
+        priority = canonical_priority_score(
+            normalized_savings=normalized_savings,
+            confidence_score_value=float(finding.get("confidence", 0.0)),
+            governance_severity_value=governance_severity,
+            urgency_score_value=0.0,
+            low_risk_bonus_value=low_risk_bonus,
+        ) * 100.0
 
         rec = Recommendation(
             recommendation_id=_recommendation_id(finding, action),
@@ -359,7 +387,7 @@ def run(waste_findings: list[dict]) -> list[Recommendation]:
             estimated_savings=round(estimated_savings, 4),
             savings_pct=round(savings_pct, 2),
             risk=str(profile["risk"]),
-            priority_score=round(savings_pct * finding["confidence"], 4),
+            priority_score=round(priority, 2),
             rationale=build_rationale(finding, action, estimated_savings),
             effort=effort,
             time_to_realize=time_to_realize,

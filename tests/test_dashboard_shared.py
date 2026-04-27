@@ -6,6 +6,7 @@ import dashboard._shared as shared
 from dashboard._shared import (
     apply_owner_assignments,
     load_scoped_df,
+    normalize_canonical_recommendations,
     overlay_recommendation_actions,
     save_recommendation_action,
 )
@@ -162,3 +163,38 @@ def test_overlay_recommendation_actions_applies_saved_status(tmp_path, monkeypat
     assert out[0]["action_status"] == "implemented"
     assert out[0]["action_owner"] == "finops@company.com"
     assert out[0]["realized_savings"] == 42.0
+
+
+def test_normalize_canonical_recommendations_derives_signal_from_root_cause():
+    out = normalize_canonical_recommendations(
+        pd.DataFrame(
+            [
+                {
+                    "recommendation_id": "rec-1",
+                    "action_type": "resize_down",
+                    "root_cause_type": "billing_side_idle_compute_proxy",
+                    "estimated_savings_usd": 50.0,
+                    "effort_score": 2.0,
+                    "risk_score": 25,
+                    "confidence": 0.8,
+                    "priority_score": 0.5,
+                    "billing_month": "2026-04",
+                    "cloud_provider": "aws",
+                    "team": "platform",
+                    "account_id": "123",
+                    "resource_id": "i-123",
+                    "nec_impact_usd": 60.0,
+                    "approval_required": False,
+                    "owner_email": "owner@company.com",
+                    "application": "platform-core",
+                    "environment": "prod",
+                    "workload_criticality": "medium",
+                    "sla_tier": "gold",
+                    "support_group": "platform-ops",
+                }
+            ]
+        )
+    )
+    assert out[0]["signal_type"] == "idle_compute_proxy"
+    assert out[0]["waste_type"] == "idle_compute_proxy"
+    assert out[0]["time_to_realize"] == "1 week"

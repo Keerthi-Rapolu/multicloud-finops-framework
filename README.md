@@ -1,115 +1,184 @@
 # Multi-Cloud FinOps Decision Engine
 
-> **An open-source, explainable multi-cloud FinOps decision engine that combines NEC modeling, attribution governance, waste detection, reasoning, forecasting, and action tracking across AWS, Azure, and GCP — moving FinOps from reactive reporting to evidence-backed decision support.**
+> **An explainable multi-cloud FinOps decision engine for attribution, waste detection, forecasting, and risk-aware optimization across AWS, Azure, and GCP.**
 
-**Authors:** Keerthi Rapolu · Rishika Naha &nbsp;|&nbsp; April 2026
-
----
-
-## The Problem
-
-Modern enterprises run workloads across multiple cloud providers simultaneously. Each hyper-scaler speaks a different billing language:
-
-| Pain Point | Reality |
-|---|---|
-| **Schema fragmentation** | AWS CUR, Azure Cost Management, and GCP Billing Export use incompatible column names, granularities, and discount representations |
-| **Untagged resources** | 30–50% of cloud resources lack cost allocation tags in real deployments |
-| **RI/SP amortization** | `unblended_cost` shows `$0` for RI-covered hours — resources look free, distorting accountability |
-| **Shared infrastructure** | Networking, logging, and security costs have no direct owner and inflate team budgets arbitrarily |
-| **No prescriptive intelligence** | Existing tools report what was spent but cannot explain *why* costs changed, identify waste with ownership, quantify expected impact, or track recommendation state |
-| **No open-source standard** | Existing tools (CloudHealth, Apptio) are closed-source and expensive |
-
-This framework addresses all six gaps with a reproducible, SQL-first pipeline backed by a deterministic intelligence layer — and is designed to answer the operational questions dashboards usually leave open: what changed, why it changed, what to do next, how confident the system is, and how actions should be tracked.
+**Authors:** Keerthi Rapolu and Rishika Naha  
+**Date:** April 2026  
+**Status:** Research prototype with synthetic but reproducible benchmark data
 
 ---
 
-## What It Does
+## Abstract
+
+This repository implements an explainable, post-billing FinOps decision system that normalizes AWS, Azure, and GCP billing data into a canonical Net Effective Cost (NEC) model, quantifies attribution gaps, identifies recoverable inefficiencies, ranks recommendations with explicit reasoning, and projects month-end cost under baseline and optimized scenarios. The system is designed as a reproducible research demo rather than an autonomous remediation platform: all metrics are derived from canonical DuckDB/dbt models, all recommendation scores are deterministic, and all savings layers are separated into raw signal, recoverable opportunity, actionable savings, and realization-adjusted projected savings.
+
+## Problem
+
+Multi-cloud cost management remains fragmented because each provider exposes different billing schemas, discount semantics, and attribution fields. Traditional dashboards can show where spend occurred, but they usually do not answer the harder operational questions:
+
+- what portion of NEC is unattributed and therefore not optimization-ready
+- what inefficiency signals are technically recoverable
+- what savings remain actionable after risk and feasibility rules
+- what month-end NEC is likely under current behavior versus likely under successful remediation
+- what evidence supports each recommendation
+
+## Research Gap
+
+Most FinOps tools stop at descriptive reporting. They do not combine all of the following in one open, reproducible system:
+
+- canonical NEC-based normalization across AWS, Azure, and GCP
+- attribution governance and owner-assignment diagnostics
+- explicit waste-signal taxonomy
+- deterministic recommendation scoring with auditability
+- realization-adjusted savings projection
+- scenario-aware month-end forecasting
+- recommendation lifecycle and validation hooks
+
+## Proposed System
+
+The repository positions Streamlit as a presentation layer over a canonical decision layer. Business logic is computed once in dbt/Python and then rendered across pages without page-specific formulas.
+
+Canonical outputs:
+
+- `marts.fct_finops_summary`
+- `marts.fct_finops_signals`
+- `marts.fct_finops_recommendations`
+- `marts.fct_finops_decisions`
+- `marts.fct_action_lifecycle`
+- `marts.fct_month_end_forecast`
+- `marts.fct_forecast_backtest`
+- `marts.fct_model_accuracy`
+- `marts.fct_finops_decision_metrics`
+
+Recommendation confidence is also calibrated in the Python and dbt layers using:
+
+- signal persistence across periods
+- corroborating signals in the same scope
+- a penalty for anomaly-only evidence without corroboration
+
+## Architecture
+
+1. Ingest synthetic AWS CUR, Azure Cost Export, and GCP Billing Export data.
+2. Normalize cloud-specific billing semantics in dbt staging and intermediate models.
+3. Materialize a unified NEC mart in DuckDB.
+4. Compute canonical FinOps signals, recommendations, decisions, lifecycle rows, and forecasts.
+5. Render the canonical outputs in Streamlit without recomputing business logic per page.
 
 ```mermaid
-flowchart TD
-    subgraph SRC["☁️  DATA SOURCES"]
-        direction LR
-        AWS["**AWS CUR**\n48 columns"]
-        AZURE["**Azure Cost Mgmt**\n32 columns"]
-        GCP["**GCP Billing**\n27 columns"]
-    end
+flowchart LR
+    A[Synthetic AWS / Azure / GCP billing data]
+    B[dbt staging + intermediate normalization]
+    C[fct_unified_billing NEC mart]
+    D[fct_finops_signals]
+    E[fct_finops_recommendations]
+    F[fct_finops_decisions]
+    G[fct_action_lifecycle]
+    H[fct_month_end_forecast]
+    I[fct_forecast_backtest]
+    J[fct_model_accuracy]
+    K[fct_finops_decision_metrics]
+    L[Streamlit dashboard]
 
-    SRC --> ING
-
-    subgraph ING["⚙️  LAYER 1 · INGESTION"]
-        I1["load_synthetic.py\nGenerate → Validate → Land as Parquet\ndata/raw/{cloud}/YYYY-MM/"]
-    end
-
-    ING --> BRZ
-
-    subgraph BRZ["🟫  LAYER 2 · STAGING  ·  BRONZE"]
-        B1["stg_aws_cur  ·  stg_azure_cost  ·  stg_gcp_billing\nRename  ·  Cast  ·  Parse timestamps  ·  Extract tags\nMaterialized as views in DuckDB"]
-    end
-
-    BRZ --> SLV
-
-    subgraph SLV["🪙  LAYER 3 · INTERMEDIATE  ·  SILVER"]
-        S1["int_aws_nec  ·  int_azure_nec  ·  int_gcp_nec\nNEC computation  ·  RI / SP / CUD amortization  ·  Waste isolation\nMaterialized as tables in DuckDB"]
-    end
-
-    SLV --> GLD
-
-    subgraph GLD["🥇  LAYER 4 · MART  ·  GOLD"]
-        G1["fct_unified_billing\nUNION ALL → 31-column Unified Cost Allocation Schema\ncloud_provider · nec · nec_waste · allocated_team · service_category"]
-    end
-
-    GLD --> ALC
-
-    subgraph ALC["🔧  LAYER 5 · ALLOCATION ENGINE"]
-        A1["shared_cost.py  ·  nec_model.py  ·  untagged_heuristic.py\nShared cost distribution  ·  NEC aggregation  ·  Untagged attribution"]
-    end
-
-    ALC --> INT
-
-    subgraph INT["🧠  LAYER 6 · COST INTELLIGENCE ENGINE"]
-        IN1["waste_detector.py  ·  causal_engine.py  ·  impact_simulator.py\nWaste Detection  ·  Root Cause Reasoning  ·  Impact Simulation\nConfidence scoring  ·  Savings estimation  ·  Risk classification"]
-    end
-
-    INT --> DSH
-
-    subgraph DSH["📊  LAYER 7 · DASHBOARD"]
-        D1["Streamlit + Plotly\nOverview · Cost Allocation · Tagging & Attribution\nWaste & Recommendations · Cost Intelligence"]
-    end
-
-    classDef srcNode fill:#1a2f4a,stroke:#4a9eff,color:#e8f4ff
-    classDef ingNode fill:#1a3a1a,stroke:#4caf50,color:#e8ffe8
-    classDef brzNode fill:#3d1f0a,stroke:#cd7f32,color:#ffe8d0
-    classDef slvNode fill:#1e2535,stroke:#94a3b8,color:#e2e8f0
-    classDef gldNode fill:#3d3200,stroke:#ffd700,color:#fffde0
-    classDef alcNode fill:#2d1a4a,stroke:#a855f7,color:#f0e8ff
-    classDef intNode fill:#1a0a2e,stroke:#ec4899,color:#fce7f3
-    classDef dshNode fill:#0a2a35,stroke:#06b6d4,color:#e0f7ff
-
-    style SRC fill:#0f1f35,stroke:#4a9eff,color:#b0d4ff
-    style ING fill:#0f2a0f,stroke:#4caf50,color:#b0e8b0
-    style BRZ fill:#2a1200,stroke:#cd7f32,color:#f5c990
-    style SLV fill:#131c2e,stroke:#94a3b8,color:#c8d8e8
-    style GLD fill:#2a2200,stroke:#ffd700,color:#ffe680
-    style ALC fill:#1e1030,stroke:#a855f7,color:#d4b0f5
-    style INT fill:#0f0520,stroke:#ec4899,color:#fbb6ce
-    style DSH fill:#051a22,stroke:#06b6d4,color:#90e0ef
-
-    class AWS,AZURE,GCP srcNode
-    class I1 ingNode
-    class B1 brzNode
-    class S1 slvNode
-    class G1 gldNode
-    class A1 alcNode
-    class IN1 intNode
-    class D1 dshNode
+    A --> B --> C
+    C --> D --> E --> F
+    E --> G
+    C --> H
+    H --> I
+    G --> J
+    E --> J
+    F --> K
+    G --> K
+    H --> K
+    J --> K
+    K --> L
 ```
 
----
+## What Is Novel Here?
+
+This repository is not just a cloud-cost dashboard. The research contribution is the combination of:
+
+- a canonical FinOps decision model that separates raw waste signal, recoverable savings, actionable savings, and realization-adjusted projected savings
+- explainable signal-to-action mapping with deterministic root-cause reasoning and auditable evidence
+- confidence-calibrated recommendations that account for persistence, corroboration, and anomaly-only penalties
+- lightweight forecast backtesting through `fct_forecast_backtest` rather than unvalidated projection-only output
+- lifecycle and realized-savings readiness through `fct_action_lifecycle` and `fct_model_accuracy`
+- a reproducible synthetic benchmark that can be rebuilt locally with dbt, DuckDB, and tests
+
+## Canonical Definitions
+
+The system uses these definitions consistently across code, marts, and dashboard pages:
+
+- `list_cost`: pre-discount cloud cost
+- `nec`: net effective cost after cloud pricing effects
+- `unattributed_nec`: NEC without accountable owner or team attribution
+- `waste_signal`: raw detected inefficiency magnitude before recovery or execution filters
+- `recoverable_savings`: technically recoverable amount before execution and realization constraints
+- `actionable_savings`: risk-screened savings allowed after feasibility rules
+- `projected_savings`: realization-adjusted expected savings
+- `optimized_nec`: projected month-end NEC minus projected savings
+- `commitment_waste`: unused RI, SP, or commitment capacity
+- `tagging_gap`: unattributed NEC divided by NEC
+- `waste_rate`: commitment waste divided by NEC
+
+## Evaluation Methodology
+
+The repository reports evaluation-oriented metrics rather than unsupported production claims:
+
+- attribution coverage %
+- unattributed NEC %
+- commitment waste %
+- recoverable savings
+- actionable savings
+- projected savings
+- recommendation counts and actionability rate
+- confidence-weighted / reliability-weighted savings
+- SLA breach counts
+- forecast confidence and bounded projection ranges
+- forecast backtest error metrics via `fct_forecast_backtest`
+- action lifecycle accuracy via `fct_action_lifecycle` and `fct_model_accuracy`
+
+## Reproducibility
+
+- Synthetic billing data for multiple months is committed to the repository.
+- dbt models produce all canonical marts in DuckDB.
+- Python reasoning and forecast layers are deterministic.
+- Tests validate numeric consistency, scoring determinism, and cross-mart invariants.
+- Forecast outputs can be backtested against historical synthetic months.
+- Lifecycle rows can be persisted locally and re-materialized into canonical marts.
+
+## Limitations
+
+- The dataset is synthetic and should be treated as a reproducible benchmark, not enterprise validation.
+- The system does not perform autonomous remediation; it produces explainable recommendations and tracked lifecycle state.
+- `idle_compute_proxy` is billing-derived and does not yet use runtime CPU or memory telemetry; telemetry-backed idle detection is phase 2 work.
+- Real-world validation is still pending; current evaluation is against a reproducible synthetic benchmark only.
+- Lifecycle and realized-savings tracking are implemented as canonical data structures, but real enterprise action history is not yet available in this repo.
+
+## Boundary With Intent-Aware Cloud Governance
+
+This repository focuses on post-billing FinOps accountability and decision support only:
+
+- multi-cloud billing normalization
+- NEC modeling
+- allocation and chargeback
+- tagging governance
+- waste detection
+- recommendation scoring
+- month-end forecast
+- action lifecycle validation
+
+It does **not** implement intent-aware provisioning, semantic workload governance, runtime optimization, vector search, or LLM-based policy reasoning. Those belong to the separate `intent-aware-cloud-governance` repository.
+
+## Final Audit Checks
+
+The repository has been audited for the following publication-readiness constraints:
+
+- no raw emoji markdown such as `:green_circle:` or `:mag:` in the dashboard code paths
+- no dashboard KPI pages intentionally hardcode canonical FinOps totals
+- README claims match implemented canonical marts, scoring, forecast, and lifecycle behavior
+- documentation does not claim production validation, autonomous remediation, or real enterprise savings
 
 ## Quick Start
-
-**Prerequisites:** Python 3.11+, `pip install -r requirements.txt`, dbt installed via pip
-> **Windows:** `make` is not built in. Install it once with `winget install GnuWin32.Make`, then add `C:\Program Files (x86)\GnuWin32\bin` to your PATH.
 
 ```bash
 # Clone and install
@@ -117,23 +186,19 @@ git clone https://github.com/Keerthi-Rapolu/multicloud-finops-framework.git
 cd multicloud-finops-framework
 pip install -r requirements.txt
 
-# Full pipeline + dashboard in one command
+# Build data + marts + tests + dashboard
 make demo
 ```
 
 ```bash
 # Or run stages individually
-make data       # generate synthetic billing data  →  data/raw/
-make dbt        # run all dbt models (Bronze → Silver → Gold)
-make test       # run unit tests
-make dashboard  # launch Streamlit at http://localhost:8501
-
-# Override month or scenario
-make pipeline MONTH=2026-04 SCENARIO=untagged-heavy
+make data
+make dbt
+make test
+make dashboard
 ```
 
 ---
-
 ## Core Concepts
 
 ### Net Effective Cost (NEC)
@@ -225,14 +290,24 @@ Converts `WasteFinding` objects into prioritised `Recommendation` dicts by estim
 | `remove_resource` (zombie) | 90% of `nec_used` | Medium |
 | `release_commitment` (underutilized) | 50% of waste signal | Medium |
 
-Recommendations are ranked by `priority_score = estimated_savings × (1 − risk_weight)`, surfacing the highest ROI, lowest risk actions first. The dashboard renders a full before/after scenario comparison showing projected spend reduction if all recommendations are applied.
+Recommendations are ranked by the canonical FinOps scoring formula:
+
+`priority_score = 0.35 * normalized_savings + 0.25 * confidence + 0.20 * governance_severity + 0.10 * urgency + 0.10 * low_risk_bonus`
+
+Where:
+- `normalized_savings = recommendation_savings / max_savings_in_scope`
+- `governance_severity = 1.0` for severe attribution gaps, `0.8` for shared-cost concentration, `0.65` for anomaly or forecast risk, `0.35` for commitment waste, and `0.30` for idle or zombie resource signals, with `+0.10` for missing ownership and `+0.10` for SLA breach
+- `urgency = 0.60 * normalized_waste_growth_rate + 0.40 * normalized_anomaly_score`
+- `low_risk_bonus` is highest for no-downtime, no-approval actions
+
+Recommendations are deduplicated at the canonical signal/action level for the current billing scope, and the Waste page renders only recoverable optimization actions. Governance gaps and forecast risks remain in Insights so unattributed cost is not mislabeled as direct waste.
 
 #### 4. Explainable Decision Support Layer
 
 On top of raw findings and recommendations, the dashboard exposes three decision-support capabilities:
 
 - **Reasoning engine** — turns normalized FinOps signals into structured decisions with `root_cause`, `evidence`, `recommended_action`, `action_justification`, `confidence_score`, `risk_score`, `approval_required`, and `next_best_action`
-- **Lightweight forecasting** — projects month-end NEC, waste, unattributed spend, and action-adjusted savings using explainable methods such as month-to-date run rate and trailing moving averages
+- **Lightweight forecasting** — projects month-end NEC, commitment waste, unattributed NEC, and action-adjusted savings using explainable methods such as month-to-date run rate and trailing moving averages
 - **Action lifecycle tracking** — keeps local/demo recommendation state (`recommended → approved → implemented → verified`) with owner, expected savings, realized savings, and verification notes
 
 This is what makes the project a publishable decision engine rather than only a reporting surface.
@@ -457,7 +532,7 @@ The Streamlit dashboard has a home page plus 5 detail pages — run with `make d
 
 The dashboard is designed to support one clear FinOps workflow end to end:
 
-1. **Find the problem** — the Home page and Insights page surface the dominant issue: unattributed spend, commitment waste, or abnormal cost movement.
+1. **Find the problem** — the Home page and Insights page surface the dominant issue: unattributed NEC, commitment waste, or abnormal cost movement.
 2. **Understand why it happened** — Waste & Recommendations and Cost Intelligence show evidence, confidence, risk, and the likely operational cause.
 3. **Assign ownership** — Tagging & Attribution identifies gaps and allows owner assignment where direct attribution is missing.
 4. **Choose a safe action** — recommendations carry `risk_score`, `risk_reason`, `approval_required`, and `action_safety`.
@@ -467,10 +542,10 @@ The dashboard is designed to support one clear FinOps workflow end to end:
 
 For a short walkthrough, use this sequence:
 
-1. Open **Home** to show portfolio NEC, waste, unattributed spend, and the maturity score.
+1. Open **Home** to show portfolio NEC, commitment waste, unattributed NEC, and the maturity score.
 2. Open **Cost Intelligence** to show the top 3 actions for the week plus the month-end forecast.
 3. Open **Waste & Recommendations** to show the action table, approval posture, and lifecycle state.
-4. Open **Tagging & Attribution** to show ownership gaps and how unattributed spend can be reduced.
+4. Open **Tagging & Attribution** to show ownership gaps and how unattributed NEC can be reduced.
 5. Return to **Cost Intelligence** and export the executive markdown summary or Jira-ready action list.
 
 ### Suggested Screenshots

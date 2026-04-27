@@ -1,0 +1,269 @@
+version: 2
+
+models:
+  - name: fct_finops_decision_metrics
+    description: Canonical page-facing FinOps metrics mart that consolidates governance gap, optimization opportunity, actionable savings, projected savings, and optimized NEC into one source of truth for the dashboard.
+    columns:
+      - name: billing_month
+        tests: [not_null]
+      - name: cloud_provider
+        tests: [not_null]
+      - name: team
+        tests: [not_null]
+      - name: list_cost
+        tests: [not_null]
+      - name: nec
+        tests: [not_null]
+      - name: unattributed_nec
+        tests: [not_null]
+      - name: tagging_gap
+        tests: [not_null]
+      - name: commitment_waste
+        tests: [not_null]
+      - name: waste_rate
+        tests: [not_null]
+      - name: waste_signal
+        tests: [not_null]
+      - name: recoverable_savings
+        tests: [not_null]
+      - name: actionable_savings
+        tests: [not_null]
+      - name: projected_savings
+        tests: [not_null]
+      - name: projected_nec
+        tests: [not_null]
+      - name: optimized_nec
+        tests: [not_null]
+      - name: low_risk_savings
+        tests: [not_null]
+      - name: realization_rate
+        tests: [not_null]
+
+  - name: dim_finops_signal_action_map
+    description: Explicit canonical mapping from FinOps signals to conditions, actions, and expected impact used by the decision engine.
+    columns:
+      - name: signal_type
+        tests: [not_null, unique]
+      - name: condition_logic
+        tests: [not_null]
+      - name: action_type
+        tests: [not_null]
+      - name: expected_impact
+        tests: [not_null]
+
+  - name: fct_finops_signals
+    description: Canonical FinOps signal fact table built from normalized billing, allocation, governance, and forecast data.
+    columns:
+      - name: signal_id
+        tests: [not_null, unique]
+      - name: signal_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - tagging_gap
+                  - unattributed_cost_gap
+                  - commitment_waste
+                  - zombie_resource
+                  - idle_compute_proxy
+                  - shared_cost_concentration
+                  - cost_anomaly
+                  - forecasted_month_end_risk
+      - name: entity_id
+        tests: [not_null]
+      - name: metric_value
+        tests: [not_null]
+      - name: threshold
+        tests: [not_null]
+      - name: direction
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['above', 'below']
+      - name: confidence
+        tests: [not_null]
+      - name: signal_weight
+        tests: [not_null]
+      - name: data_window
+        tests: [not_null]
+      - name: created_at
+        tests: [not_null]
+
+  - name: fct_finops_recommendations
+    description: Canonical FinOps recommendations scored from signals using one deterministic priority formula.
+    columns:
+      - name: recommendation_id
+        tests: [not_null, unique]
+      - name: entity_id
+        tests: [not_null]
+      - name: action_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - enforce_tags
+                  - release_commitment
+                  - resize_down
+                  - remove_resource
+                  - rebalance_shared_cost
+                  - investigate_anomaly
+                  - review_forecast_risk
+      - name: root_cause_type
+        tests: [not_null]
+      - name: signal_type
+        tests: [not_null]
+      - name: modeled_opportunity_usd
+        tests: [not_null]
+      - name: estimated_savings_usd
+        tests: [not_null]
+      - name: recoverability_rate
+        tests: [not_null]
+      - name: effort_score
+        tests: [not_null]
+      - name: risk_score
+        tests: [not_null]
+      - name: confidence
+        tests: [not_null]
+      - name: normalized_savings
+        tests: [not_null]
+      - name: priority_score
+        tests: [not_null]
+      - name: billing_month
+        tests: [not_null]
+      - name: cloud_provider
+        tests: [not_null]
+      - name: metric_name
+        tests: [not_null]
+      - name: metric_value
+        tests: [not_null]
+      - name: threshold
+        tests: [not_null]
+      - name: direction
+        tests: [not_null]
+      - name: created_at
+        tests: [not_null]
+
+  - name: fct_finops_decisions
+    description: Entity-level FinOps decision table selecting the best recommendation candidate and preserving competing scores.
+    columns:
+      - name: decision_id
+        tests: [not_null, unique]
+      - name: entity_id
+        tests: [not_null]
+      - name: selected_recommendation
+        tests: [not_null]
+      - name: decision_score
+        tests: [not_null]
+      - name: decision_reason
+        tests: [not_null]
+      - name: created_at
+        tests: [not_null]
+
+  - name: fct_action_lifecycle
+    description: FinOps action lifecycle with expected versus realized savings validation fields.
+    columns:
+      - name: recommendation_id
+        tests: [not_null, unique]
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['recommended', 'approved', 'implemented', 'verified', 'rejected']
+      - name: expected_savings_usd
+        tests: [not_null]
+      - name: realized_savings_usd
+        tests: [not_null]
+      - name: realization_rate
+        tests: [not_null]
+      - name: verification_status
+        tests: [not_null]
+
+  - name: fct_forecast_backtest
+    description: Historical forecast backtest using first-half month run rate plus trailing history to estimate month-end NEC and measure error.
+    columns:
+      - name: billing_month
+        tests: [not_null]
+      - name: cloud_provider
+        tests: [not_null]
+      - name: team
+        tests: [not_null]
+      - name: actual_nec
+        tests: [not_null]
+      - name: forecast_nec
+        tests: [not_null]
+      - name: absolute_error_usd
+        tests: [not_null]
+      - name: absolute_pct_error
+        tests: [not_null]
+      - name: accuracy_pct
+        tests: [not_null]
+
+  - name: fct_month_end_forecast
+    description: Canonical month-end NEC forecast using current-month run rate with optional trailing three-month blend.
+    columns:
+      - name: billing_month
+        tests: [not_null]
+      - name: cloud_provider
+        tests: [not_null]
+      - name: team
+        tests: [not_null]
+      - name: current_mtd_nec
+        tests: [not_null]
+      - name: forecast_month_end_nec
+        tests: [not_null]
+      - name: trailing_3_month_avg_nec
+        tests: [not_null]
+      - name: forecast_confidence
+        tests: [not_null]
+      - name: projected_savings_usd
+        tests: [not_null]
+      - name: realization_rate
+        tests: [not_null]
+      - name: projected_realized_savings_usd
+        tests: [not_null]
+      - name: optimized_month_end_nec
+        tests: [not_null]
+      - name: forecast_risk_level
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['low', 'medium', 'high']
+
+  - name: fct_finops_summary
+    description: Canonical FinOps summary totals by billing month, cloud, and team used as the single source of truth for dashboard metrics.
+    columns:
+      - name: billing_month
+        tests: [not_null]
+      - name: cloud_provider
+        tests: [not_null]
+      - name: team
+        tests: [not_null]
+      - name: total_list_cost
+        tests: [not_null]
+      - name: total_nec_used
+        tests: [not_null]
+      - name: total_nec_waste
+        tests: [not_null]
+      - name: total_nec
+        tests: [not_null]
+      - name: total_commitment_waste
+        tests: [not_null]
+      - name: total_unattributed_cost
+        tests: [not_null]
+      - name: total_governance_gap
+        tests: [not_null]
+      - name: total_recoverable_savings
+        tests: [not_null]
+      - name: total_optimization_opportunity
+        tests: [not_null]
+
+  - name: fct_model_accuracy
+    description: Aggregate closed-loop validation for recommendation accuracy and confidence calibration.
+    columns:
+      - name: action_type
+        tests: [not_null]

@@ -8,6 +8,7 @@ separately via an integration test that skips when the DB is absent.
 
 import math
 from pathlib import Path
+import shutil
 
 import pandas as pd
 import pytest
@@ -411,23 +412,30 @@ _DB_PATH = Path(__file__).resolve().parents[1] / "finops_dbt.duckdb"
 
 @pytest.mark.skipif(not _DB_PATH.exists(), reason="finops_dbt.duckdb not present — run `dbt run` first")
 class TestIntegration:
-    def test_build_nec_report_returns_report(self):
-        report = build_nec_report(db_path=_DB_PATH)
+    @pytest.fixture(scope="class")
+    def db_copy(self, tmp_path_factory):
+        db_dir = tmp_path_factory.mktemp("nec_model_db")
+        db_copy = db_dir / "finops_dbt.duckdb"
+        shutil.copy2(_DB_PATH, db_copy)
+        return db_copy
+
+    def test_build_nec_report_returns_report(self, db_copy):
+        report = build_nec_report(db_path=db_copy)
         assert isinstance(report, NECReport)
         assert not report.by_cloud.empty
 
-    def test_by_cloud_has_expected_clouds(self):
-        report = build_nec_report(db_path=_DB_PATH)
+    def test_by_cloud_has_expected_clouds(self, db_copy):
+        report = build_nec_report(db_path=db_copy)
         clouds = set(report.by_cloud["cloud_provider"])
         assert clouds == {"aws", "azure", "gcp"}
 
-    def test_total_nec_positive(self):
-        report = build_nec_report(db_path=_DB_PATH)
+    def test_total_nec_positive(self, db_copy):
+        report = build_nec_report(db_path=db_copy)
         assert report.total_nec > 0
 
-    def test_month_filter_narrows_rows(self):
+    def test_month_filter_narrows_rows(self, db_copy):
         from allocation.nec_model import load_billing_data
-        df_all = load_billing_data(_DB_PATH)
-        df_month = load_billing_data(_DB_PATH, billing_month="2026-03")
+        df_all = load_billing_data(db_copy)
+        df_month = load_billing_data(db_copy, billing_month="2026-03")
         assert len(df_month) <= len(df_all)
         assert (df_month["billing_month"] == "2026-03").all()

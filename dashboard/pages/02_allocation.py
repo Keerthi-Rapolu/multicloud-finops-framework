@@ -20,6 +20,8 @@ from allocation.nec_model import (
 )
 from allocation.shared_cost import SharedCostDistributor
 from dashboard._shared import load_scoped_df
+from dashboard._shared import compute_finops_summary_metrics, load_finops_summary, render_demo_banner
+from dashboard.canonical import load_canonical_metrics
 
 _CONFIG = Path(__file__).resolve().parents[2] / "config" / "shared_cost_weights.yml"
 
@@ -31,12 +33,24 @@ _TEAM_LABELS = {
     "ml":          "Machine Learning",
     "unattributed":"Unattributed",
 }
+# Short forms for metric display (Streamlit metric values truncate at ~12 chars in narrow columns)
+_TEAM_LABELS_SHORT = {
+    "data-eng":    "Data Eng",
+    "platform":    "Platform",
+    "frontend":    "Frontend",
+    "backend":     "Backend",
+    "ml":          "ML",
+    "unattributed":"Unattributed",
+}
 
 st.set_page_config(page_title="Cost Allocation", layout="wide")
 st.title("Cost Allocation")
 st.caption("Who is spending what, and how is shared infrastructure charged back to teams?")
+render_demo_banner()
 
-df, _, _ = load_scoped_df(render_sidebar=True)
+df, month_filter, selected_cloud = load_scoped_df(render_sidebar=True)
+summary_df = load_finops_summary(month_filter)
+canonical_metrics = load_canonical_metrics(month_filter, selected_cloud)
 
 # ---------------------------------------------------------------------------
 # Team NEC summary
@@ -49,21 +63,50 @@ by_team_all = by_team.groupby("team").agg(
     nec_waste=("nec_waste", "sum"),
     savings=("savings", "sum"),
 ).reset_index()
+if not summary_df.empty:
+    by_team_all = (
+        summary_df[
+            summary_df["cloud_provider"].isin([selected_cloud]) if selected_cloud != "All" else [True] * len(summary_df)
+        ]
+        .groupby("team", dropna=False)[
+            ["total_list_cost", "total_nec", "total_commitment_waste"]
+        ]
+        .sum()
+        .reset_index()
+        .rename(
+            columns={
+                "total_list_cost": "list_cost",
+                "total_nec": "nec",
+                "total_commitment_waste": "nec_waste",
+            }
+        )
+    )
+    by_team_all["savings"] = by_team_all["list_cost"] - by_team_all["nec"]
 by_team_all["savings_pct"] = (
     (by_team_all["savings"] / by_team_all["list_cost"].replace(0, float("nan"))) * 100
 ).round(1)
 
-total_nec = by_team_all["nec"].sum()
+total_nec = canonical_metrics.nec or by_team_all["nec"].sum()
 top_row   = by_team_all.loc[by_team_all["nec"].idxmax()]
 top_label = _TEAM_LABELS.get(top_row["team"], top_row["team"].replace("-", " ").title())
 top_pct   = top_row["nec"] / total_nec * 100 if total_nec else 0
 
+_top_label_short = _TEAM_LABELS_SHORT.get(top_row["team"], top_label[:8])
 ck1, ck2, ck3 = st.columns(3)
 ck1.metric("Teams tracked",          str(len(by_team_all)))
-ck2.metric("Largest cost centre",    top_label,
-           delta=f"{top_pct:.0f}% of NEC — ${top_row['nec']:,.0f}", delta_color="off")
-ck3.metric("Total commitment waste", f"${by_team_all['nec_waste'].sum():,.0f}",
-           delta_color="inverse")
+ck2.metric(
+    "Largest cost centre",
+    _top_label_short,
+    delta=f"{top_pct:.0f}% of NEC — ${top_row['nec']:,.0f}",
+    delta_color="off",
+    help=f"Full name: {top_label}",
+)
+ck3.metric(
+    "Total commitment waste",
+    f"${(canonical_metrics.commitment_waste or by_team_all['nec_waste'].sum()):,.0f}",
+    delta_color="inverse",
+    help="Idle RI/SP/CUD capacity cost — committed but not consumed.",
+)
 
 st.markdown("---")
 st.subheader("NEC by team")
@@ -85,7 +128,7 @@ with col_bar:
         text=_sorted["nec"].map("${:,.0f}".format),
     )
     fig.update_traces(textposition="outside")
-    fig.update_layout(height=320, margin=dict(t=10, b=40), coloraxis_showscale=False, yaxis_title=None)
+    fig.update_layout(height=320, margin=dict(t=10, b=40, r=110), coloraxis_showscale=False, yaxis_title=None)
     st.plotly_chart(fig, use_container_width=True)
 
 with col_tbl:

@@ -19,9 +19,13 @@ WasteType = Literal[
 ]
 
 ActionType = Literal[
+    "enforce_tags",
     "release_commitment",
     "resize_down",
     "remove_resource",
+    "rebalance_shared_cost",
+    "investigate_anomaly",
+    "review_forecast_risk",
 ]
 
 RiskLevel = Literal["Low", "Medium", "High"]
@@ -29,6 +33,18 @@ EffortLevel = Literal["Low", "Medium", "High"]
 TimeToRealize = Literal["Immediate", "1 week", "1 month"]
 ActionSafety = Literal["auto_safe", "approval_required", "manual_review", "blocked"]
 LifecycleStatus = Literal["recommended", "approved", "rejected", "implemented", "verified"]
+EntityType = Literal["team", "resource", "account"]
+SignalDirection = Literal["above", "below"]
+SignalType = Literal[
+    "tagging_gap",
+    "unattributed_cost_gap",
+    "commitment_waste",
+    "zombie_resource",
+    "idle_compute_proxy",
+    "shared_cost_concentration",
+    "cost_anomaly",
+    "forecasted_month_end_risk",
+]
 
 
 class WasteFinding(TypedDict):
@@ -165,3 +181,65 @@ class DecisionReasoning(TypedDict):
     expected_impact: str
     next_best_action: str
     action_safety: ActionSafety
+
+
+class DecisionSignal(TypedDict):
+    signal_id: str
+    entity_type: EntityType
+    entity_id: str
+    signal_type: SignalType
+    metric_name: str
+    metric_value: float
+    threshold: float
+    direction: SignalDirection
+    data_window: str
+    signal_weight: float
+    confidence: float
+    created_at: str
+
+
+class DecisionExplanation(TypedDict):
+    issue_type: str
+    root_cause_type: str
+    evidence: list[DecisionSignal]
+    decision_basis: dict[str, float | int | str | bool]
+    rejected_alternatives: list[dict[str, float | int | str | bool]]
+
+
+class CanonicalRecommendation(TypedDict):
+    recommendation_id: str
+    entity_id: str
+    resource_id: str | None
+    team: str
+    cloud: str
+    action_type: str
+    root_cause_type: str
+    nec_impact_usd: float
+    savings_estimate_usd: float
+    priority_score: float
+    confidence: float
+    risk_score: int
+    effort_score: float
+    urgency_score: float
+    time_to_value_days: int
+    evidence_strength: float
+    signal_ids: list[str]
+    status: LifecycleStatus
+    owner: str
+    approval_required: bool
+    created_at: str
+    implemented_at: str | None
+    verified_at: str | None
+    realized_savings_usd: float
+    explanation: DecisionExplanation
+
+
+class CanonicalDecision(TypedDict):
+    decision_id: str
+    entity_id: str
+    candidate_recommendations: list[str]
+    selected_recommendation: str
+    decision_score: float
+    decision_reason: str
+    competing_scores: dict[str, float]
+    created_at: str

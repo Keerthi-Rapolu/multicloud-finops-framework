@@ -1,0 +1,16 @@
+{
+  "assignments": [
+    {
+      "account_id": "a1b2c3d4-9999-9999-9999-000000000099",
+      "cloud_provider": "azure",
+      "assigned_team": "platform",
+      "assigned_date": "2026-03-15"
+    },
+    {
+      "account_id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "cloud_provider": "azure",
+      "assigned_team": "ml",
+      "assigned_date": "2026-03-20"
+    }
+  ]
+}
