@@ -464,30 +464,28 @@ def load_canonical_signals(month: str | None, cloud: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     with duckdb.connect(str(_DB_PATH), read_only=True) as con:
-        finops_exists = bool(
-            con.execute(
-                """
-                select count(*)
-                from information_schema.tables
-                where table_schema = 'marts'
-                  and table_name = 'fct_finops_signals'
-                """
-            ).fetchone()[0]
-        )
-        if finops_exists:
+        def _table_exists(name: str) -> bool:
+            return bool(con.execute(
+                "SELECT count(*) FROM information_schema.tables "
+                "WHERE table_schema='marts' AND table_name=?", [name]
+            ).fetchone()[0])
+
+        if _table_exists("fct_finops_signals"):
             query = """
                 select *
                 from marts.fct_finops_signals
                 where (? is null or billing_month = ?)
                   and (? = 'All' or lower(cloud_provider) = lower(?))
             """
-        else:
+        elif _table_exists("fct_signals"):
             query = """
                 select *
                 from marts.fct_signals
                 where (? is null or billing_month = ?)
                   and (? = 'All' or lower(cloud) = lower(?))
             """
+        else:
+            return pd.DataFrame()
         return con.execute(query, [month, month, cloud, cloud]).fetchdf()
 
 
@@ -499,30 +497,28 @@ def load_canonical_recommendations(month: str | None, cloud: str) -> pd.DataFram
         return pd.DataFrame()
 
     with duckdb.connect(str(_DB_PATH), read_only=True) as con:
-        finops_exists = bool(
-            con.execute(
-                """
-                select count(*)
-                from information_schema.tables
-                where table_schema = 'marts'
-                  and table_name = 'fct_finops_recommendations'
-                """
-            ).fetchone()[0]
-        )
-        if finops_exists:
+        def _table_exists(name: str) -> bool:
+            return bool(con.execute(
+                "SELECT count(*) FROM information_schema.tables "
+                "WHERE table_schema='marts' AND table_name=?", [name]
+            ).fetchone()[0])
+
+        if _table_exists("fct_finops_recommendations"):
             query = """
                 select *
                 from marts.fct_finops_recommendations
                 where (? is null or billing_month = ?)
                   and (? = 'All' or lower(cloud_provider) = lower(?))
             """
-        else:
+        elif _table_exists("fct_recommendations"):
             query = """
                 select *
                 from marts.fct_recommendations
                 where (? is null or billing_month = ?)
                   and (? = 'All' or lower(cloud) = lower(?))
             """
+        else:
+            return pd.DataFrame()
         return con.execute(query, [month, month, cloud, cloud]).fetchdf()
 
 
