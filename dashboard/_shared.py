@@ -533,13 +533,19 @@ def load_canonical_forecast(month: str | None, cloud: str) -> pd.DataFrame:
     if not _DB_PATH.exists():
         return pd.DataFrame()
 
-    query = """
-        select *
-        from marts.fct_month_end_forecast
-        where (? is null or target_month = ?)
-          and (? = 'All' or lower(cloud) = lower(?))
-    """
     with duckdb.connect(str(_DB_PATH), read_only=True) as con:
+        exists = con.execute(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema='marts' AND table_name='fct_month_end_forecast'"
+        ).fetchone()[0]
+        if not exists:
+            return pd.DataFrame()
+        query = """
+            select *
+            from marts.fct_month_end_forecast
+            where (? is null or target_month = ?)
+              and (? = 'All' or lower(cloud) = lower(?))
+        """
         return con.execute(query, [month, month, cloud, cloud]).fetchdf()
 
 

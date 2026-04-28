@@ -215,39 +215,63 @@ def _compose_from_marts(
 
     base_params = [month, month] + cloud_param + team_params
 
-    # ── fct_finops_summary ──────────────────────────────────────────────
-    sum_row = con.execute(f"""
-        SELECT
-            sum(total_list_cost),
-            sum(total_nec),
-            sum(total_commitment_waste),
-            sum(total_unattributed_cost),
-            sum(total_recoverable_savings)
-        FROM marts.fct_finops_summary
-        WHERE (? IS NULL OR billing_month = ?)
-        {cloud_cc} {team_clause}
-    """, base_params).fetchone() or [0] * 5
+    # ── fct_finops_summary (or fct_unified_billing fallback) ───────────
+    if _table_exists(con, "fct_finops_summary"):
+        sum_row = con.execute(f"""
+            SELECT
+                sum(total_list_cost),
+                sum(total_nec),
+                sum(total_commitment_waste),
+                sum(total_unattributed_cost),
+                sum(total_recoverable_savings)
+            FROM marts.fct_finops_summary
+            WHERE (? IS NULL OR billing_month = ?)
+            {cloud_cc} {team_clause}
+        """, base_params).fetchone() or [0] * 5
+    else:
+        # Bootstrap path: only fct_unified_billing was built
+        ub_team_clause = ""
+        ub_team_params: list = []
+        if teams:
+            placeholders = ",".join(["?" for _ in teams])
+            ub_team_clause = f"AND allocated_team IN ({placeholders})"
+            ub_team_params = list(teams)
+        ub_params = [month, month] + cloud_param + ub_team_params
+        sum_row = con.execute(f"""
+            SELECT
+                sum(list_cost),
+                sum(nec),
+                sum(CASE WHEN is_commitment_waste THEN nec_waste ELSE 0 END),
+                sum(CASE WHEN NOT is_tagged THEN allocated_nec ELSE 0 END),
+                0.0
+            FROM marts.fct_unified_billing
+            WHERE (? IS NULL OR billing_month = ?)
+            {_cloud_clause(cloud)} {ub_team_clause}
+        """, ub_params).fetchone() or [0] * 5
 
     list_cost, nec, commitment_waste, unattributed_nec, recoverable_mart = (
         _safe_float(v) for v in sum_row
     )
 
     # ── fct_month_end_forecast ──────────────────────────────────────────
-    fc_params = [month, month] + cloud_param + team_params
-    fc_row = con.execute(f"""
-        SELECT
-            sum(projected_month_end_nec),
-            sum(optimized_month_end_nec),
-            sum(projected_savings_usd),
-            sum(projected_realized_savings_usd),
-            avg(realization_rate),
-            avg(forecast_confidence),
-            sum(lower_bound_usd),
-            sum(upper_bound_usd)
-        FROM marts.fct_month_end_forecast
-        WHERE (? IS NULL OR billing_month = ?)
-        {cloud_cc} {team_clause}
-    """, fc_params).fetchone() or [0] * 8
+    if _table_exists(con, "fct_month_end_forecast"):
+        fc_params = [month, month] + cloud_param + team_params
+        fc_row = con.execute(f"""
+            SELECT
+                sum(projected_month_end_nec),
+                sum(optimized_month_end_nec),
+                sum(projected_savings_usd),
+                sum(projected_realized_savings_usd),
+                avg(realization_rate),
+                avg(forecast_confidence),
+                sum(lower_bound_usd),
+                sum(upper_bound_usd)
+            FROM marts.fct_month_end_forecast
+            WHERE (? IS NULL OR billing_month = ?)
+            {cloud_cc} {team_clause}
+        """, fc_params).fetchone() or [0] * 8
+    else:
+        fc_row = [0] * 8
 
     (projected_nec, optimized_nec_fc, actionable_fc, projected_savings_fc,
      realization_rate, reliability_score, lower_bound, upper_bound) = (
@@ -255,18 +279,21 @@ def _compose_from_marts(
     )
 
     # ── fct_finops_recommendations ──────────────────────────────────────
-    rec_row = con.execute(f"""
-        SELECT
-            sum(nec_impact_usd),
-            sum(estimated_savings_usd),
-            sum(CASE WHEN risk_score < {_RISK_MEDIUM_MAX} THEN estimated_savings_usd ELSE 0 END),
-            sum(CASE WHEN risk_score < {_RISK_LOW_MAX}    THEN estimated_savings_usd ELSE 0 END),
-            count(*),
-            count(CASE WHEN risk_score < {_RISK_LOW_MAX} THEN 1 END)
-        FROM marts.fct_finops_recommendations
-        WHERE (? IS NULL OR billing_month = ?)
-        {cloud_cc} {team_clause}
-    """, base_params).fetchone() or [0] * 6
+    if _table_exists(con, "fct_finops_recommendations"):
+        rec_row = con.execute(f"""
+            SELECT
+                sum(nec_impact_usd),
+                sum(estimated_savings_usd),
+                sum(CASE WHEN risk_score < {_RISK_MEDIUM_MAX} THEN estimated_savings_usd ELSE 0 END),
+                sum(CASE WHEN risk_score < {_RISK_LOW_MAX}    THEN estimated_savings_usd ELSE 0 END),
+                count(*),
+                count(CASE WHEN risk_score < {_RISK_LOW_MAX} THEN 1 END)
+            FROM marts.fct_finops_recommendations
+            WHERE (? IS NULL OR billing_month = ?)
+            {cloud_cc} {team_clause}
+        """, base_params).fetchone() or [0] * 6
+    else:
+        rec_row = [0] * 6
 
     (waste_signal, recoverable_recs, actionable_recs,
      low_risk_recs, n_rec, n_low) = (
