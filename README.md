@@ -20,16 +20,23 @@
 - Most FinOps tools show cost data. They do not tell you what to do about it.
 - Engineers spend hours interpreting dashboards before they can act.
 - This system converts billing data into prioritized, evidence-backed decisions — with confidence scores, risk reasons, and lifecycle tracking per recommendation.
+- The savings pipeline is strictly separated: raw signal ≠ recoverable ≠ actionable ≠ projected. Collapsing these into one number, as most tools do, produces estimates that cannot be safely acted on.
 
 ---
 
-## Dashboard Preview
+## Live Demo
 
-![Overview — NEC, Optimized NEC, daily trend](docs/screenshots/01_overview.png)
+**[multicloud-finops-framework.streamlit.app](https://multicloud-finops-framework.streamlit.app/)**
 
-![Cost Intelligence — decision engine with savings pipeline and forecast](docs/screenshots/05_intelligence.png)
+The live app runs against the reproducible synthetic benchmark committed to this repo. What you will see:
 
-> Full walkthrough in the [Dashboard](#dashboard) section below.
+- **Portfolio overview** — NEC, Optimized NEC (realization-adjusted), commitment waste, and daily cost trend with anomaly markers per cloud
+- **Decision engine** — savings pipeline (signal → recoverable → actionable → projected), team decision cards with root cause, evidence, and confidence score
+- **Prioritized recommendations** — ranked action table with savings estimate, risk score, approval posture, effort, and time-to-savings per action
+- **Action lifecycle tracker** — full state machine from `recommended → approved → implemented → verified`, with realized vs projected savings comparison
+- **Attribution governance** — unattributed NEC %, tagging coverage by cloud and service, SLA escalation tracker
+
+> Run `make demo` to reproduce locally, or deploy `dashboard/` to [Streamlit Community Cloud](https://streamlit.io/cloud) for free.
 
 ---
 
@@ -54,36 +61,31 @@ Every decision is **explainable**: each recommendation carries its evidence sour
 
 ## The Problem
 
-Multi-cloud billing is fragmented. AWS, Azure, and GCP each expose different schemas, discount semantics, and attribution fields. Existing FinOps tools can show **where** money was spent. They almost never answer:
+Multi-cloud billing is fragmented. AWS, Azure, and GCP expose different schemas, discount semantics, and attribution fields. Existing tools can show **where** money was spent. They almost never answer:
 
 - **What portion of spend is unattributed** and therefore not optimization-ready?
-- **Which inefficiency signals are technically recoverable** after applying risk and feasibility rules?
+- **Which inefficiency signals are technically recoverable** after risk and feasibility filters?
 - **What month-end cost is likely** if no action is taken vs. if recommended actions are executed?
 - **What evidence supports each recommendation**, and how confident should we be?
 
-Without answers to these questions, engineers spend hours interpreting dashboards rather than acting on them.
+Without these answers, engineers interpret dashboards instead of acting on them.
 
 ---
 
 ## Key Innovation
 
-This system makes three contributions that are absent from most existing FinOps tools:
-
 ### 1. Separated savings layers — not a single "savings" number
-
-Raw waste signal ≠ recoverable opportunity ≠ actionable savings ≠ projected savings.  
-Each layer is strictly smaller than the previous, computed separately, and labeled explicitly:
 
 ```
 Inefficiency signal  →  Recoverable opportunity  →  Actionable savings  →  Realization-adjusted projection
     (raw billing)          (× recovery rate)         (low/med risk only)       (× execution probability)
 ```
 
-Collapsing these into a single "savings" figure — as most tools do — produces numbers that cannot be acted on safely.
+Each layer is strictly smaller than the previous, computed separately, and labeled explicitly. Collapsing these into a single figure — as most tools do — produces numbers that cannot be acted on safely.
 
-### 2. Signal-to-action mapping with deterministic scoring
+### 2. Deterministic, auditable scoring
 
-Every recommendation is produced by a canonical signal/action pair, not a heuristic. The priority score formula is fully auditable:
+Every recommendation is produced by a canonical signal/action pair. The priority score is fully auditable:
 
 ```
 priority_score = 0.35 × normalized_savings
@@ -93,82 +95,26 @@ priority_score = 0.35 × normalized_savings
                + 0.10 × low_risk_bonus
 ```
 
-Governance signals (attribution gaps, tagging failures) are separated from optimization signals (commitment waste, idle compute) — they are scored differently and never ranked against each other.
+Governance signals (attribution gaps, tagging failures) are scored separately from optimization signals (commitment waste, idle compute) and never ranked against each other.
 
 ### 3. Recommendation lifecycle with realized-savings validation
 
-The system tracks the full recommendation lifecycle: `recommended → approved/rejected → implemented → verified`. Realized savings are compared against projected savings to calibrate the realization rate for future recommendations — a closed feedback loop that most FinOps tools do not implement.
+The system tracks the full lifecycle: `recommended → approved/rejected → implemented → verified`. Realized savings are compared against projected savings to calibrate the realization rate for future recommendations — a closed feedback loop absent from most FinOps tools.
 
 ---
 
 ## Results — Reproducible Benchmark
 
-On the synthetic multi-cloud dataset shipped in this repo (4 billing months, ~28,000 rows across AWS, Azure, GCP):
+On the synthetic multi-cloud dataset shipped in this repo (4 billing months, ~28,000 rows, AWS + Azure + GCP):
 
-- **~$7,500/month unattributed cost identified** — 58% of NEC cannot be tied to an accountable team, making optimization unreliable until fixed
+- **~$7,500/month unattributed cost identified** — 58% of NEC is not tied to an accountable team, making optimization unreliable until fixed
 - **~$1,500/month recoverable opportunity detected** — commitment waste and idle compute signals after recovery rates applied
 - **~$947/month realistic savings projection** — after execution probability and risk filters (62–70% realization rate)
 - **19 prioritized recommendations** — each with risk score, approval posture, effort estimate, and time-to-savings
 - **103 canonical signals** across 5 teams, deduplicated and ranked by deterministic scoring formula
-- **Forecast confidence scored 0–1** — from data quality, signal strength, and historical stability; not a black-box number
+- **Forecast confidence scored 0–1** — derived from data quality, signal strength, and historical stability
 
 > All figures are from the reproducible synthetic benchmark. Run `make demo` to reproduce locally.
-
----
-
-## Dashboard
-
-Five pages, each driven by canonical mart tables — no business logic is recomputed in the UI layer.
-
-> To try the live dashboard: `make demo` locally, or deploy `dashboard/` to [Streamlit Community Cloud](https://streamlit.io/cloud) for free.
-
----
-
-### Overview — portfolio summary at a glance
-
-![Overview](docs/screenshots/01_overview.png)
-
-Five KPI tiles: Total List Cost, Net Effective Cost, Optimized NEC (realization-adjusted), Commitment Waste, and Waste %. Daily NEC trend with z-score anomaly markers per cloud. The executive headline explains the primary issue and distinguishes attribution risk from optimization opportunity.
-
----
-
-### Cost Intelligence — decision engine, not a dashboard
-
-![Cost Intelligence](docs/screenshots/05_intelligence.png)
-
-Forecast outlook with projected vs optimized NEC. Savings pipeline: inefficiency signal → recoverable opportunity → actionable savings → realization-adjusted projection. Team decision cards with root cause, evidence, confidence score, and next-best action per team.
-
----
-
-### Waste & Recommendations — what to do and in what order
-
-![Waste & Recommendations](docs/screenshots/04_waste.png)
-
-Savings pipeline banner shows the full 4-layer separation. Step 3 produces a prioritized action table with savings estimate, risk score, approval posture, effort, time-to-savings, and ROI per action.
-
----
-
-### Action Lifecycle — execution tracking closes the loop
-
-![Action Lifecycle](docs/screenshots/04b_lifecycle.png)
-
-Every recommendation tracks state from `recommended → approved → implemented → verified`. Owner assignment, realized savings, and verification notes are stored per action. Realized vs projected savings are compared to calibrate the realization rate for future recommendations — a feedback loop most FinOps tools do not implement.
-
----
-
-### Governance & Tagging — attribution before optimization
-
-![Tagging & Attribution](docs/screenshots/03_tagging.png)
-
-Attribution coverage by cloud, service, and account. Owner assignment with SLA escalation tracker (7-day fix-it SLA). Unattributed NEC is separated from optimization opportunity — $7,507 unattributed does not mean $7,507 recoverable.
-
----
-
-### Cost Allocation — enterprise chargeback by team
-
-![Cost Allocation](docs/screenshots/02_allocation.png)
-
-Per-team NEC breakdown across 6 teams. RI/SP commitment utilization. Shared-cost distribution with three configurable strategies (proportional, even, weighted). Data Engineering at 37% of NEC is the largest cost centre in this benchmark run.
 
 ---
 
@@ -203,7 +149,7 @@ flowchart LR
     K --> L
 ```
 
-Five canonical pipeline stages:
+Five pipeline stages:
 
 1. **Ingest** — synthetic AWS CUR, Azure Cost Export, GCP Billing Export validated and landed to Parquet
 2. **Normalize** — dbt staging and intermediate models unify billing semantics and compute NEC per cloud
@@ -285,40 +231,11 @@ Converts findings into prioritized recommendations using conservative recovery r
 | `remove_resource` (zombie) | 90% of `nec_used` | Medium |
 | `release_commitment` (underutilized) | 50% of waste signal | Medium |
 
-Priority score formula:
-
-```
-priority_score = 0.35 × normalized_savings
-               + 0.25 × confidence
-               + 0.20 × governance_severity
-               + 0.10 × urgency
-               + 0.10 × low_risk_bonus
-```
-
 ### 4. Explainable Decision Support Layer
 
 - **Reasoning engine** — structured decisions with `root_cause`, `evidence`, `recommended_action`, `action_justification`, `confidence_score`, `risk_score`, `approval_required`, `next_best_action`
-- **Lightweight forecasting** — projects month-end NEC, commitment waste, and action-adjusted savings using explainable weighted smoothing (`0.7 × run_rate + 0.3 × trailing_3m_avg`)
+- **Lightweight forecasting** — projects month-end NEC and action-adjusted savings using weighted smoothing (`0.7 × run_rate + 0.3 × trailing_3m_avg`)
 - **Action lifecycle tracking** — `recommended → approved/rejected → implemented → verified` with owner, expected savings, realized savings, and verification notes
-
----
-
-## Synthetic Data Scenarios
-
-No real cloud credentials needed. Named scenarios are committed to the repo:
-
-| Scenario | Untagged | RI Coverage | SP Coverage | Hours |
-|---|---|---|---|---|
-| `normal` | 15% | 20% | 15% | 72 |
-| `untagged-medium` | 35% | 20% | 15% | 72 |
-| `untagged-heavy` | 55% | 20% | 15% | 72 |
-| `ri-heavy` | 15% | 60% | 10% | 72 |
-| `sp-heavy` | 15% | 10% | 60% | 72 |
-| `full-month` | 15% | 20% | 15% | 720 |
-
-```bash
-make pipeline SCENARIO=untagged-heavy MONTH=2026-04
-```
 
 ---
 
@@ -387,8 +304,6 @@ Everything runs free. No cloud compute, no paid APIs, no proprietary SaaS.
 
 ## Canonical Definitions
 
-These terms are used consistently across code, dbt models, and dashboard pages:
-
 | Term | Definition |
 |---|---|
 | `list_cost` | Pre-discount cloud cost (on-demand rate) |
@@ -405,85 +320,23 @@ These terms are used consistently across code, dbt models, and dashboard pages:
 | `tagging_gap` | Unattributed NEC ÷ NEC |
 | `waste_rate` | Commitment waste ÷ NEC |
 
----
-
-## Core Concepts
-
-### Net Effective Cost (NEC)
-
-`unblended_cost` is the wrong metric for RI/SP chargeback. It systematically misrepresents cost:
-
-- **RI-covered hours** → `unblended_cost = $0.00` — the instance appears free
-- **SP-covered hours** → `unblended_cost = on-demand rate` — the discount is invisible
-
-NEC corrects this per cloud using the actual commitment-cost fields:
-
-| Cloud | Line Item Type | NEC Formula |
-|---|---|---|
-| **AWS** `DiscountedUsage` | RI-covered compute | `nec = reservation/EffectiveCost` |
-| **AWS** `SavingsPlanCoveredUsage` | SP-covered compute | `nec = savingsPlan/SavingsPlanEffectiveCost` |
-| **AWS** `RIFee` | Monthly RI commitment row | `nec_used = 0`; `nec_waste = unused_upfront + unused_recurring` |
-| **AWS** `SavingsPlanRecurringFee` | Monthly SP commitment row | `nec_waste = recurring_commitment − used_commitment` |
-| **Azure** `Usage` | Amortized export row | `nec = CostInBillingCurrency` |
-| **Azure** `UnusedReservation / UnusedSavingsPlan` | Idle commitment row | `nec_waste = CostInBillingCurrency` |
-| **GCP** Detailed Export | All service rows | `nec = GREATEST(cost + Σ credit.amount, 0)` |
-
-### Shared Cost Distribution
-
-Three configurable strategies, set per-service in [`config/shared_cost_weights.yml`](config/shared_cost_weights.yml):
-
-| Strategy | Formula | When to use |
-|---|---|---|
-| `proportional` | `share = team_direct_nec / Σ all_direct_nec` | Default — tracks actual usage weight |
-| `even` | `share = 1 / N` | Small teams where proportional splits create noise |
-| `weighted` | `share = team_weight / Σ weights` | Headcount or contractual SLA differences |
-
-Default weights: Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%.
-
-### Unified Cost Allocation Schema (CAS)
-
-All three clouds normalize to a single 31-column schema in `fct_unified_billing`:
-
-```
-Identity      cloud_provider · billing_account_id · billing_month · account_id · account_name
-Time          usage_date
-Resource      resource_id · service_name · product_name · instance_type · region
-Usage         usage_amount · usage_unit · currency
-Cost          list_cost · nec · nec_used · nec_waste · effective_unit_price · discount_type
-Compute       vcpu · memory_gb
-Tags          tag_team · tag_environment · tag_cost_center · is_tagged
-Allocation    allocated_team · allocated_nec · is_shared_cost · is_commitment_waste
-Category      service_category  (Compute | Storage | Database | Analytics | Platform | Other)
-```
+See [docs/NEC_CALCULATIONS.md](docs/NEC_CALCULATIONS.md) for per-cloud NEC formulas and [DESIGN_DOCUMENT.md](DESIGN_DOCUMENT.md) for the full CAS schema.
 
 ---
 
-## Querying Results Directly
+## Reproducibility
 
-After `make dbt`, query the mart in `finops_dbt.duckdb`:
+- Synthetic billing data for 4 months is committed to the repo — no credentials required
+- dbt models produce all canonical marts from source CSVs
+- Python reasoning and forecast layers are fully deterministic
+- Tests validate numeric consistency, scoring determinism, and cross-mart invariants
+- Forecast outputs are backtested against historical synthetic months (`fct_forecast_backtest`)
+- Lifecycle rows are persisted locally and re-materialized into canonical marts on rebuild
 
-```python
-import duckdb
+Six named data scenarios cover normal, untagged-heavy, RI-heavy, SP-heavy, and full-month configurations. Run any with:
 
-con = duckdb.connect("finops_dbt.duckdb", read_only=True)
-
-# Spend by cloud and service category
-con.execute("""
-    SELECT cloud_provider, service_category,
-           COUNT(*) AS rows,
-           ROUND(SUM(nec), 2) AS total_nec
-    FROM marts.fct_unified_billing
-    GROUP BY 1, 2 ORDER BY 1, 3 DESC
-""").df()
-
-# Commitment waste by cloud
-con.execute("""
-    SELECT cloud_provider,
-           ROUND(SUM(CASE WHEN is_commitment_waste THEN nec_waste ELSE 0 END), 2) AS waste,
-           ROUND(SUM(nec_used), 2) AS used
-    FROM marts.fct_unified_billing
-    GROUP BY cloud_provider
-""").df()
+```bash
+make pipeline SCENARIO=untagged-heavy MONTH=2026-04
 ```
 
 ---
@@ -497,21 +350,9 @@ The system reports evaluation-oriented metrics, not unsupported production claim
 - Recoverable, actionable, and projected savings (separated layers)
 - Recommendation counts, risk breakdown, and actionability rate
 - Confidence-weighted projected savings
-- SLA breach counts and owner assignment gap
 - Forecast confidence score and bounded projection range
 - Forecast backtest error metrics (`fct_forecast_backtest`)
 - Action lifecycle accuracy (`fct_action_lifecycle` + `fct_model_accuracy`)
-
----
-
-## Reproducibility
-
-- Synthetic billing data for 4 months is committed to the repo — no credentials required
-- dbt models produce all canonical marts from source CSVs
-- Python reasoning and forecast layers are fully deterministic
-- Tests validate numeric consistency, scoring determinism, and cross-mart invariants
-- Forecast outputs are backtested against historical synthetic months
-- Lifecycle rows are persisted locally and re-materialized into canonical marts on rebuild
 
 ---
 
@@ -521,7 +362,6 @@ The system reports evaluation-oriented metrics, not unsupported production claim
 - No autonomous remediation — the system produces recommendations and lifecycle state only
 - `idle_compute_proxy` is billing-derived and does not use runtime CPU/memory telemetry; telemetry-backed detection is phase 2 work
 - Real-world validation pending — current evaluation is against synthetic benchmark only
-- Lifecycle tracking is implemented as canonical data structures; real enterprise action history is not in this repo
 
 **Future work:** CloudWatch / Azure Monitor / GCP Monitoring telemetry, deployment/change correlation, unit economics, production persistence for approval workflows, Jira/ServiceNow integration.
 
@@ -535,35 +375,14 @@ It does **not** implement intent-aware provisioning, runtime optimization, vecto
 
 ---
 
-## CI
-
-On every push to `main` or `dev`, GitHub Actions runs:
-
-1. `pytest tests/ -v` — full test suite
-2. `python load_synthetic.py --month 2026-03 --force` — smoke test all three cloud schemas
-3. `dbt run` — materialize all models
-4. `dbt test` — run dbt schema tests
-
----
-
 ## Research Paper
-
-This framework accompanies a research paper submitted to arXiv / IEEE CLOUD:
 
 > **A Multi-Cloud Cost Intelligence Framework: Attribution, Waste Detection, Causal Reasoning, and Impact Simulation**  
 > Keerthi Rapolu, Rishika Naha — 2026
 
-**Phase 1 contributions:**
-- 31-column Unified Cost Allocation Schema (CAS) with complete field mappings for AWS CUR, Azure Cost Management Export, and GCP Billing Detailed Export
-- Per-cloud NEC amortization formulas covering RI, Savings Plans, and CUDs
-- Three configurable shared-cost distribution strategies with empirical comparison on synthetic data
-- Two-stage untagged resource attribution: deterministic heuristic rules + optional `RandomForestClassifier`
+**Phase 1:** Unified Cost Allocation Schema (CAS), per-cloud NEC amortization formulas, three shared-cost distribution strategies, two-stage untagged resource attribution.
 
-**Phase 2 contributions:**
-- Taxonomy-driven waste detection engine: four waste categories, per-finding confidence scores, team ownership attribution
-- Causal reasoning engine: structured root-cause chains per team, MoM trend analysis, z-score anomaly detection
-- Impact simulation engine: conservative recovery rates, risk-adjusted priority scoring, 4-layer savings separation
-- Recommendation lifecycle with realized-savings validation and realization-rate calibration feedback
+**Phase 2:** Taxonomy-driven waste detection, causal reasoning with MoM trend and anomaly detection, 4-layer impact simulation with deterministic scoring, recommendation lifecycle with realized-savings calibration.
 
 ---
 
@@ -577,6 +396,17 @@ This framework accompanies a research paper submitted to arXiv / IEEE CLOUD:
 | [docs/AZURE_COST_REFERENCE.md](docs/AZURE_COST_REFERENCE.md) | Azure amortized vs actual export, RI/SP daily row mechanics |
 | [docs/GCP_BILLING_REFERENCE.md](docs/GCP_BILLING_REFERENCE.md) | GCP credits JSON structure, CUD/SUD mechanics |
 | [DESIGN_DOCUMENT.md](DESIGN_DOCUMENT.md) | Full architecture, CAS schema decisions, module design |
+
+---
+
+## CI
+
+On every push to `main` or `dev`, GitHub Actions runs:
+
+1. `pytest tests/ -v` — full test suite
+2. `python load_synthetic.py --month 2026-03 --force` — smoke test all three cloud schemas
+3. `dbt run` — materialize all models
+4. `dbt test` — run dbt schema tests
 
 ---
 
