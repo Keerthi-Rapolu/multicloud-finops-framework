@@ -66,18 +66,18 @@ Recommendation confidence is also calibrated in the Python and dbt layers using:
 
 ```mermaid
 flowchart LR
-    A[Synthetic AWS / Azure / GCP billing data]
-    B[dbt staging + intermediate normalization]
-    C[fct_unified_billing NEC mart]
-    D[fct_finops_signals]
-    E[fct_finops_recommendations]
-    F[fct_finops_decisions]
-    G[fct_action_lifecycle]
-    H[fct_month_end_forecast]
-    I[fct_forecast_backtest]
-    J[fct_model_accuracy]
-    K[fct_finops_decision_metrics]
-    L[Streamlit dashboard]
+    A["Synthetic AWS / Azure / GCP billing data"]
+    B["dbt staging + intermediate normalization"]
+    C["fct_unified_billing NEC mart"]
+    D["fct_finops_signals"]
+    E["fct_finops_recommendations"]
+    F["fct_finops_decisions"]
+    G["fct_action_lifecycle"]
+    H["fct_month_end_forecast"]
+    I["fct_forecast_backtest"]
+    J["fct_model_accuracy"]
+    K["fct_finops_decision_metrics"]
+    L["Streamlit dashboard"]
 
     A --> B --> C
     C --> D --> E --> F
