@@ -102,18 +102,57 @@ Running on the synthetic multi-cloud dataset shipped in this repo (4 billing mon
 
 ## Dashboard
 
-Five pages, each driven by canonical mart tables — no business logic is recomputed in the UI layer:
-
-| Page | What it shows |
-|---|---|
-| **Home** | Portfolio KPIs, spend by cloud, top risks, FinOps maturity score |
-| **Overview** | Daily NEC trend, anomaly markers, savings vs list cost, service breakdown |
-| **Cost Allocation** | Per-team NEC, RI/SP utilization, shared-cost distribution (3 strategies) |
-| **Tagging & Attribution** | Coverage by cloud/service/account, SLA escalation tracker, owner assignment |
-| **Waste & Recommendations** | 5-step pipeline: detect → diagnose → prioritize → quick wins → impact scenarios |
-| **Cost Intelligence** | Causal decision engine, forecast outlook, team decision cards, anomaly explanations |
+Five pages, each driven by canonical mart tables — no business logic is recomputed in the UI layer.
 
 > To try the live dashboard: `make demo` locally, or deploy `dashboard/` to [Streamlit Community Cloud](https://streamlit.io/cloud) for free.
+
+---
+
+### Overview — portfolio summary at a glance
+
+![Overview](docs/screenshots/01_overview.png)
+
+Five KPI tiles: Total List Cost, Net Effective Cost, Optimized NEC (realization-adjusted), Commitment Waste, and Waste %. Daily NEC trend with z-score anomaly markers per cloud. The executive headline explains the primary issue and distinguishes attribution risk from optimization opportunity.
+
+---
+
+### Cost Intelligence — decision engine, not a dashboard
+
+![Cost Intelligence](docs/screenshots/05_intelligence.png)
+
+Forecast outlook with projected vs optimized NEC. Savings pipeline: inefficiency signal → recoverable opportunity → actionable savings → realization-adjusted projection. Team decision cards with root cause, evidence, confidence score, and next-best action per team.
+
+---
+
+### Waste & Recommendations — what to do and in what order
+
+![Waste & Recommendations](docs/screenshots/04_waste.png)
+
+Savings pipeline banner shows the full 4-layer separation. Step 3 produces a prioritized action table with savings estimate, risk score, approval posture, effort, time-to-savings, and ROI per action.
+
+---
+
+### Action Lifecycle — execution tracking closes the loop
+
+![Action Lifecycle](docs/screenshots/04b_lifecycle.png)
+
+Every recommendation tracks state from `recommended → approved → implemented → verified`. Owner assignment, realized savings, and verification notes are stored per action. Realized vs projected savings are compared to calibrate the realization rate for future recommendations — a feedback loop most FinOps tools do not implement.
+
+---
+
+### Governance & Tagging — attribution before optimization
+
+![Tagging & Attribution](docs/screenshots/03_tagging.png)
+
+Attribution coverage by cloud, service, and account. Owner assignment with SLA escalation tracker (7-day fix-it SLA). Unattributed NEC is separated from optimization opportunity — $7,507 unattributed does not mean $7,507 recoverable.
+
+---
+
+### Cost Allocation — enterprise chargeback by team
+
+![Cost Allocation](docs/screenshots/02_allocation.png)
+
+Per-team NEC breakdown across 6 teams. RI/SP commitment utilization. Shared-cost distribution with three configurable strategies (proportional, even, weighted). Data Engineering at 37% of NEC is the largest cost centre in this benchmark run.
 
 ---
 
