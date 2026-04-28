@@ -13,6 +13,26 @@
 
 ---
 
+> **This is not a dashboard — it is a decision system with explainable reasoning and execution tracking.**
+
+### Why this matters
+
+- Most FinOps tools show cost data. They do not tell you what to do about it.
+- Engineers spend hours interpreting dashboards before they can act.
+- This system converts billing data into prioritized, evidence-backed decisions — with confidence scores, risk reasons, and lifecycle tracking per recommendation.
+
+---
+
+## Dashboard Preview
+
+![Overview — NEC, Optimized NEC, daily trend](docs/screenshots/01_overview.png)
+
+![Cost Intelligence — decision engine with savings pipeline and forecast](docs/screenshots/05_intelligence.png)
+
+> Full walkthrough in the [Dashboard](#dashboard) section below.
+
+---
+
 ## What This System Does
 
 Most cloud cost tools answer **"how much did we spend?"**
@@ -83,18 +103,14 @@ The system tracks the full recommendation lifecycle: `recommended → approved/r
 
 ## Results — Reproducible Benchmark
 
-Running on the synthetic multi-cloud dataset shipped in this repo (4 billing months, ~28,000 rows):
+On the synthetic multi-cloud dataset shipped in this repo (4 billing months, ~28,000 rows across AWS, Azure, GCP):
 
-| Metric | Value |
-|---|---|
-| Billing rows normalized | ~28,000 across AWS, Azure, GCP |
-| Attribution coverage | ~57% directly tagged; remainder heuristically attributed |
-| Unattributed NEC | ~57% of total NEC |
-| Commitment waste detected | ~5–8% of NEC |
-| Canonical recommendations | 103 signals across 5 teams |
-| Low-risk quick wins | Direct-release actions, no downtime required |
-| Realization rate modeled | ~62–70% execution probability |
-| Forecast confidence | Scored 0–1 from data quality + signal strength + historical stability |
+- **~$7,500/month unattributed cost identified** — 58% of NEC cannot be tied to an accountable team, making optimization unreliable until fixed
+- **~$1,500/month recoverable opportunity detected** — commitment waste and idle compute signals after recovery rates applied
+- **~$947/month realistic savings projection** — after execution probability and risk filters (62–70% realization rate)
+- **19 prioritized recommendations** — each with risk score, approval posture, effort estimate, and time-to-savings
+- **103 canonical signals** across 5 teams, deduplicated and ranked by deterministic scoring formula
+- **Forecast confidence scored 0–1** — from data quality, signal strength, and historical stability; not a black-box number
 
 > All figures are from the reproducible synthetic benchmark. Run `make demo` to reproduce locally.
 
@@ -235,79 +251,6 @@ make dashboard   # streamlit run dashboard/app.py
 
 ---
 
-## Canonical Definitions
-
-These terms are used consistently across code, dbt models, and dashboard pages:
-
-| Term | Definition |
-|---|---|
-| `list_cost` | Pre-discount cloud cost (on-demand rate) |
-| `nec` | Net Effective Cost — actual billed cost after commitment pricing |
-| `nec_used` | NEC for capacity actually consumed |
-| `nec_waste` | NEC for idle RI/SP commitment capacity |
-| `unattributed_nec` | NEC without accountable team attribution |
-| `waste_signal` | Raw detected inefficiency magnitude — before recovery or execution filters |
-| `recoverable_savings` | Technically recoverable amount after recovery rate applied |
-| `actionable_savings` | Risk-screened savings — low and medium risk only |
-| `projected_savings` | Realization-adjusted expected savings (× execution probability) |
-| `optimized_nec` | Projected month-end NEC minus projected savings |
-| `commitment_waste` | Unused RI, SP, or CUD capacity |
-| `tagging_gap` | Unattributed NEC ÷ NEC |
-| `waste_rate` | Commitment waste ÷ NEC |
-
----
-
-## Core Concepts
-
-### Net Effective Cost (NEC)
-
-`unblended_cost` is the wrong metric for RI/SP chargeback. It systematically misrepresents cost:
-
-- **RI-covered hours** → `unblended_cost = $0.00` — the instance appears free
-- **SP-covered hours** → `unblended_cost = on-demand rate` — the discount is invisible
-
-NEC corrects this per cloud using the actual commitment-cost fields:
-
-| Cloud | Line Item Type | NEC Formula |
-|---|---|---|
-| **AWS** `DiscountedUsage` | RI-covered compute | `nec = reservation/EffectiveCost` |
-| **AWS** `SavingsPlanCoveredUsage` | SP-covered compute | `nec = savingsPlan/SavingsPlanEffectiveCost` |
-| **AWS** `RIFee` | Monthly RI commitment row | `nec_used = 0`; `nec_waste = unused_upfront + unused_recurring` |
-| **AWS** `SavingsPlanRecurringFee` | Monthly SP commitment row | `nec_waste = recurring_commitment − used_commitment` |
-| **Azure** `Usage` | Amortized export row | `nec = CostInBillingCurrency` |
-| **Azure** `UnusedReservation / UnusedSavingsPlan` | Idle commitment row | `nec_waste = CostInBillingCurrency` |
-| **GCP** Detailed Export | All service rows | `nec = GREATEST(cost + Σ credit.amount, 0)` |
-
-### Shared Cost Distribution
-
-Three configurable strategies, set per-service in [`config/shared_cost_weights.yml`](config/shared_cost_weights.yml):
-
-| Strategy | Formula | When to use |
-|---|---|---|
-| `proportional` | `share = team_direct_nec / Σ all_direct_nec` | Default — tracks actual usage weight |
-| `even` | `share = 1 / N` | Small teams where proportional splits create noise |
-| `weighted` | `share = team_weight / Σ weights` | Headcount or contractual SLA differences |
-
-Default weights: Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%.
-
-### Unified Cost Allocation Schema (CAS)
-
-All three clouds normalize to a single 31-column schema in `fct_unified_billing`:
-
-```
-Identity      cloud_provider · billing_account_id · billing_month · account_id · account_name
-Time          usage_date
-Resource      resource_id · service_name · product_name · instance_type · region
-Usage         usage_amount · usage_unit · currency
-Cost          list_cost · nec · nec_used · nec_waste · effective_unit_price · discount_type
-Compute       vcpu · memory_gb
-Tags          tag_team · tag_environment · tag_cost_center · is_tagged
-Allocation    allocated_team · allocated_nec · is_shared_cost · is_commitment_waste
-Category      service_category  (Compute | Storage | Database | Analytics | Platform | Other)
-```
-
----
-
 ## Intelligence Layer
 
 ### 1. Waste Detection Engine
@@ -439,6 +382,79 @@ multicloud-finops-framework/
 | ML (optional) | **scikit-learn** | `RandomForestClassifier` for untagged resource attribution |
 
 Everything runs free. No cloud compute, no paid APIs, no proprietary SaaS.
+
+---
+
+## Canonical Definitions
+
+These terms are used consistently across code, dbt models, and dashboard pages:
+
+| Term | Definition |
+|---|---|
+| `list_cost` | Pre-discount cloud cost (on-demand rate) |
+| `nec` | Net Effective Cost — actual billed cost after commitment pricing |
+| `nec_used` | NEC for capacity actually consumed |
+| `nec_waste` | NEC for idle RI/SP commitment capacity |
+| `unattributed_nec` | NEC without accountable team attribution |
+| `waste_signal` | Raw detected inefficiency magnitude — before recovery or execution filters |
+| `recoverable_savings` | Technically recoverable amount after recovery rate applied |
+| `actionable_savings` | Risk-screened savings — low and medium risk only |
+| `projected_savings` | Realization-adjusted expected savings (× execution probability) |
+| `optimized_nec` | Projected month-end NEC minus projected savings |
+| `commitment_waste` | Unused RI, SP, or CUD capacity |
+| `tagging_gap` | Unattributed NEC ÷ NEC |
+| `waste_rate` | Commitment waste ÷ NEC |
+
+---
+
+## Core Concepts
+
+### Net Effective Cost (NEC)
+
+`unblended_cost` is the wrong metric for RI/SP chargeback. It systematically misrepresents cost:
+
+- **RI-covered hours** → `unblended_cost = $0.00` — the instance appears free
+- **SP-covered hours** → `unblended_cost = on-demand rate` — the discount is invisible
+
+NEC corrects this per cloud using the actual commitment-cost fields:
+
+| Cloud | Line Item Type | NEC Formula |
+|---|---|---|
+| **AWS** `DiscountedUsage` | RI-covered compute | `nec = reservation/EffectiveCost` |
+| **AWS** `SavingsPlanCoveredUsage` | SP-covered compute | `nec = savingsPlan/SavingsPlanEffectiveCost` |
+| **AWS** `RIFee` | Monthly RI commitment row | `nec_used = 0`; `nec_waste = unused_upfront + unused_recurring` |
+| **AWS** `SavingsPlanRecurringFee` | Monthly SP commitment row | `nec_waste = recurring_commitment − used_commitment` |
+| **Azure** `Usage` | Amortized export row | `nec = CostInBillingCurrency` |
+| **Azure** `UnusedReservation / UnusedSavingsPlan` | Idle commitment row | `nec_waste = CostInBillingCurrency` |
+| **GCP** Detailed Export | All service rows | `nec = GREATEST(cost + Σ credit.amount, 0)` |
+
+### Shared Cost Distribution
+
+Three configurable strategies, set per-service in [`config/shared_cost_weights.yml`](config/shared_cost_weights.yml):
+
+| Strategy | Formula | When to use |
+|---|---|---|
+| `proportional` | `share = team_direct_nec / Σ all_direct_nec` | Default — tracks actual usage weight |
+| `even` | `share = 1 / N` | Small teams where proportional splits create noise |
+| `weighted` | `share = team_weight / Σ weights` | Headcount or contractual SLA differences |
+
+Default weights: Platform 30%, Data Engineering 25%, Frontend 20%, Backend 15%, ML 10%.
+
+### Unified Cost Allocation Schema (CAS)
+
+All three clouds normalize to a single 31-column schema in `fct_unified_billing`:
+
+```
+Identity      cloud_provider · billing_account_id · billing_month · account_id · account_name
+Time          usage_date
+Resource      resource_id · service_name · product_name · instance_type · region
+Usage         usage_amount · usage_unit · currency
+Cost          list_cost · nec · nec_used · nec_waste · effective_unit_price · discount_type
+Compute       vcpu · memory_gb
+Tags          tag_team · tag_environment · tag_cost_center · is_tagged
+Allocation    allocated_team · allocated_nec · is_shared_cost · is_commitment_waste
+Category      service_category  (Compute | Storage | Database | Analytics | Platform | Other)
+```
 
 ---
 
