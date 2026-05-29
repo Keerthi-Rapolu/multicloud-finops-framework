@@ -5,9 +5,6 @@ data/raw/
 *.duckdb
 *.duckdb.wal
 
-# dbt profiles (may contain credentials)
-dbt_project/profiles.yml
-
 # dbt build artifacts
 dbt_project/target/
 dbt_project/logs/

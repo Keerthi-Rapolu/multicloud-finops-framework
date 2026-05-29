@@ -1,0 +1,9 @@
+multicloud_finops:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # Path to DuckDB file, relative to dbt_project/
+      # The .duckdb file is gitignored — create it locally by running: dbt run
+      path: "../finops_dbt.duckdb"
+      threads: 4
