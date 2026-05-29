@@ -1243,4 +1243,4 @@ Update the Status column as you finish each item. Change `TODO` to `In Progress`
 
 ---
 
-*Rishika's task guide — multicloud-finops-framework v2.2, May 2026.*
+*Rishika's task guide — multicloud-finops-framework v2.3, May 2026.*
