@@ -1,0 +1,39 @@
+\section{Cost Allocation Strategies}
+\label{sec:allocation}
+
+Cross-cloud optimization is not only a pricing problem; it is also an accountability problem. Many billing rows are directly attributable to a team or workload, but platform subscriptions, shared networking, observability, and other common services often are not. The allocation layer therefore has two goals: preserve the economic total exactly, and project shared or unattributed spend into accountable analytical scope without hiding uncertainty.
+
+The implemented system distinguishes direct allocation from shared-cost allocation. Direct allocation uses explicit ownership signals such as tags, subscription metadata, or team mappings. Shared-cost allocation applies when a cost is intentionally communal and should be fanned out across recipients using a stated basis. Unresolved unattributed spend remains visible rather than being silently forced into a misleading owner bucket.
+
+\subsection{Shared-Cost Distribution}
+Let $C_s$ denote shared cost and let $w_i$ denote the weight assigned to recipient $i$ such that $\sum_i w_i = 1$. The allocated shared cost for recipient $i$ is
+\begin{equation}
+A_i = C_s w_i.
+\end{equation}
+The core invariant is
+\begin{equation}
+\sum_i A_i = C_s,
+\end{equation}
+which prevents the allocation layer from creating or destroying cost.
+
+\begin{table}[t]
+\caption{Allocation strategies.}
+\label{tab:shared-strategies}
+\centering
+\footnotesize
+\begin{tabularx}{\columnwidth}{p{0.20\columnwidth} p{0.22\columnwidth} Y}
+\toprule
+\textbf{Strategy} & \textbf{Basis} & \textbf{When appropriate} \\
+\midrule
+Direct owner & Explicit metadata & Resource already has trustworthy owner tags \\
+Usage share & Team NEC or workload share & Shared platform spend scales with actual consumption \\
+Fixed split & Configured ratios & Organizational or SLA-based chargeback rules \\
+Unresolved gap & No allocation applied & Ownership evidence is too weak for forced assignment \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+In the current benchmark, Azure shared-cost fan-out preserves totals exactly, with zero delta between pre-allocation shared NEC and allocated shared NEC in every observed month. That result matters because it validates the accounting invariant before recommendation logic consumes the allocation outputs.
+
+\subsection{System Integration}
+Allocation outputs are treated as first-class decision features rather than as reporting-only artifacts. Team NEC summaries, shared-cost reporting, governance signals, and recommendation ownership all depend on the same allocation state. This design prevents a common operational failure in which dashboards, anomaly detection, and action queues each use a different notion of ``owner.'' The result is a more defensible bridge from billing visibility to actionability.

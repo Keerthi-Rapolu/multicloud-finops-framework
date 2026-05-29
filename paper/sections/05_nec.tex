@@ -1,0 +1,45 @@
+\section{Net Effective Cost Modeling}
+\label{sec:nec}
+
+Naive billing fields are not reliable measures of workload economics in a multi-cloud setting. Raw list price overstates committed usage, while certain effective-cost or credit fields can make covered usage appear artificially cheap or free when commitment spend has simply moved elsewhere in the export. NEC modeling addresses this by defining consumed workload cost and commitment waste explicitly before downstream reporting and recommendation logic begin.
+
+We use NEC to mean the economically attributable cost of consumed workload after provider-specific commitment semantics have been normalized. NEC is deliberately separated from explicit waste terms so that actionable workload economics are not conflated with idle commitment loss.
+
+\subsection{Cloud-Specific Definitions}
+For AWS, NEC must account for on-demand rows, RI-covered rows, Savings Plan-covered rows, and explicit commitment waste rows. In simplified form,
+\begin{equation}
+NEC^{AWS}_{used} = c_{\mathrm{od}} + c_{\mathrm{ri}} + c_{\mathrm{sp}},
+\end{equation}
+where the three terms denote on-demand, RI-covered, and Savings Plan-covered effective cost components. Explicit AWS commitment waste is
+\begin{equation}
+NEC^{AWS}_{waste} = w_{\mathrm{ri}} + w_{\mathrm{sp}}.
+\end{equation}
+
+For Azure, the key distinction is between actual and amortized analysis. The paper uses amortized views when modeling commitment-aware economics, so NEC is derived from amortized consumed cost while unused reservation and unused savings-plan rows are separated as waste terms.
+
+For GCP, exported discounts and credits are attached more directly to usage records. A simplified consumed-cost formulation is
+\begin{equation}
+NEC^{GCP}_{used} = \max(c_{\mathrm{list}} + c_{\mathrm{credit}}, 0),
+\end{equation}
+with commitment fees and other non-consumed terms handled separately when they represent waste or non-workload charges.
+
+\begin{table}[t]
+\caption{NEC interpretation by cloud.}
+\label{tab:nec-terms}
+\centering
+\footnotesize
+\begin{tabularx}{\columnwidth}{p{0.16\columnwidth} p{0.30\columnwidth} Y}
+\toprule
+\textbf{Cloud} & \textbf{Consumed NEC basis} & \textbf{Waste separation} \\
+\midrule
+AWS & On-demand plus RI/SP effective cost & Explicit RI and Savings Plan waste rows \\
+Azure & Amortized consumed cost & Unused reservation and savings-plan charges \\
+GCP & Usage cost after discounts and credits & Non-consumed commitment or governance terms handled separately \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Validation and Benchmark Evidence}
+The current benchmark reports aggregate list cost of \$67{,}065.52 and aggregate NEC of \$52{,}021.31, leaving \$15{,}044.21 of modeled savings relative to list price and \$136.80 of explicit commitment waste. These results illustrate why NEC should not be collapsed into naive list-cost reporting. The system also uses NEC as the economic base for per-team accountability, recommendation ranking, and forecast generation, so validation of NEC consistency is foundational for the rest of the pipeline.
+
+The implementation validates NEC in two ways. First, cloud-level rollups and downstream marts remain internally consistent after normalization. Second, waste is tracked explicitly rather than being mixed into consumed workload cost. This separation is methodologically important because it prevents reviewer-visible claims of optimization savings from being inflated by accounting artifacts.

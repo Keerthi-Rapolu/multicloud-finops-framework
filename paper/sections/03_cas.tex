@@ -1,0 +1,30 @@
+\section{Unified Cost Allocation Schema Design}
+\label{sec:cas}
+
+The Unified Cost Allocation Schema (CAS) is the paper's primary normalization layer. Its role is to decouple downstream analysis from provider-specific billing exports by defining one canonical contract for cost identity, pricing, ownership, allocation state, and decision features. Without such a contract, any cross-cloud recommendation layer is forced either to duplicate provider-specific logic in every downstream component or to operate on economically inconsistent fields.
+
+The implemented CAS groups fields into a small number of stable families: identity, pricing, resource description, ownership, and allocation. Identity fields capture cloud, billing month, account or subscription scope, and service category. Pricing fields carry list cost, effective cost, and commitment-related waste terms. Resource fields preserve service, SKU, and resource labels needed for drill-down and recommendation explanation. Ownership and allocation fields record direct tags, inferred team scope, and shared-cost allocation outcomes.
+
+\begin{table}[t]
+\caption{CAS field families.}
+\label{tab:cas-families}
+\centering
+\footnotesize
+\begin{tabularx}{\columnwidth}{p{0.22\columnwidth} p{0.28\columnwidth} Y}
+\toprule
+\textbf{Family} & \textbf{Representative fields} & \textbf{Purpose} \\
+\midrule
+Identity & cloud, billing month, billing scope & Stable grouping keys across providers \\
+Pricing & list cost, NEC, commitment waste & Economically comparable cost analysis \\
+Resource & service, SKU, resource label & Explainable drill-down and recommendation context \\
+Ownership & tag owner, team, environment & Accountability and governance analysis \\
+Allocation & shared flag, allocated team, basis & Explicit post-allocation reporting state \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+CAS design is shaped by two cross-cloud mismatches. First, the three providers encode effective cost differently: AWS distributes commitment economics through line-item types and effective-cost columns, Azure distinguishes actual versus amortized analysis, and GCP blends usage, fees, credits, and discount semantics across export fields. Second, ownership signals vary in completeness and naming quality, so the schema must preserve both direct attribution and unresolved accountability gaps rather than forcing false precision.
+
+The mapping decisions are intentionally conservative. CAS normalizes names and types, but it does not erase provider-specific semantics that matter economically. Instead, provider-local transformation models compute cloud-specific NEC terms first and then surface the results through a common schema. This layered design keeps the canonical contract stable while isolating schema drift and provider-specific billing changes to a narrower transformation boundary.
+
+Schema evolution is therefore a first-class design concern. New provider fields should either map into an existing family, extend a provider-local staging model, or be added as optional canonical attributes only if they materially improve cross-cloud reasoning. This avoids the common failure mode in which a supposedly unified schema becomes an unstable mirror of vendor exports.

@@ -38,6 +38,19 @@ build/
 .DS_Store
 Thumbs.db
 
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
 # IDE
 .vscode/
 .idea/

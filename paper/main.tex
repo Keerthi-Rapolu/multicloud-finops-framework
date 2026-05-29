@@ -1,0 +1,51 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+
+\newcommand{\systemname}{Multi-Cloud FinOps Decision Engine}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\title{An Explainable Multi-Cloud FinOps Decision Engine: \\
+Canonical Cost Normalization and Lifecycle-Aware Recommendation Support}
+
+\author{
+\IEEEauthorblockN{Keerthi Rapolu \and Rishika Naha}
+\IEEEauthorblockA{
+\textit{Independent Research}
+}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\input{sections/00_abstract}
+\end{abstract}
+
+\begin{IEEEkeywords}
+FinOps, multi-cloud, cost allocation, net effective cost, decision intelligence, cloud cost optimization
+\end{IEEEkeywords}
+
+\input{sections/01_introduction}
+\input{sections/02_background_related_work}
+\input{sections/03_cas}
+\input{sections/04_allocation}
+\input{sections/05_nec}
+\input{sections/06_decision_intelligence}
+\input{sections/07_implementation_evaluation}
+\input{sections/08_conclusion}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

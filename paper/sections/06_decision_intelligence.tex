@@ -1,0 +1,68 @@
+\section{Decision Intelligence}
+\label{sec:intelligence}
+
+The central contribution of the second project phase is a deterministic decision pipeline that operates on canonical billing and allocation outputs rather than on dashboard-local heuristics. Starting from the unified billing mart, the system materializes signals, recommendations, forecast outputs, and lifecycle summaries as explicit artifacts. This makes the intelligence layer auditable: every recommendation can be traced back to a normalized billing condition, a fixed mapping rule, and a persisted score decomposition.
+
+\subsection{Waste Detection}
+The waste detector classifies inefficiency into a finite taxonomy rather than relying on a generic overspend flag. The implemented categories are unused commitment, underutilized commitment, idle compute proxy, and zombie resource. Thresholds are loaded from configuration, allowing sensitivity to be tuned without changing code.
+
+\begin{table}[t]
+\caption{Implemented waste taxonomy.}
+\label{tab:waste-taxonomy}
+\centering
+\footnotesize
+\begin{tabularx}{\columnwidth}{p{0.18\columnwidth} p{0.24\columnwidth} p{0.12\columnwidth} Y}
+\toprule
+\textbf{Waste type} & \textbf{Signal} & \textbf{Conf.} & \textbf{Main limitation} \\
+\midrule
+Unused commitment & Explicit commitment waste rows & High & Depends on provider waste rows being exposed correctly \\
+Underutilized commitment & Commitment utilization below configured threshold & Medium & Sensitive to threshold choice \\
+Idle compute proxy & NEC-per-vCPU proxy below configured floor & Medium & Billing-derived proxy, not runtime telemetry \\
+Zombie resource & Near-zero NEC over the observation window & Medium & Low-cost resources may still have latent purpose \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The distinction between deterministic and proxy signals is important. Unused commitment is close to deterministic because it is derived from explicit waste fields. By contrast, idle compute is a billing-side approximation of low utilization; the system intentionally does not claim runtime observability it does not have.
+
+\subsection{Structured Reasoning and Recommendation Scoring}
+The next layer performs structured reasoning over billing-derived facts. Methodologically, it is better understood as a ranked explanation layer over cost signals, trends, and anomalies than as intervention-based causal inference. Fact types such as commitment waste, idle resources, unattributed cost gaps, and service-category dominance are combined into persisted explanatory narratives.
+
+Recommendations are generated from canonical signals using an explicit signal-to-action map. Idle compute proxy findings map to \texttt{resize\_down}, zombie resource findings map to \texttt{remove\_resource}, governance gaps map to \texttt{enforce\_tags}, and forecast risk signals map to \texttt{review\_forecast\_risk}. Recommendation ranking is deterministic:
+\begin{equation}
+p = 0.35s + 0.25c + 0.20g + 0.10u + 0.10l
+\end{equation}
+where $p$ is priority score, $s$ is normalized savings, $c$ is confidence, $g$ is governance severity, $u$ is urgency, and $l$ is a low-risk bonus.
+
+\begin{table}[t]
+\caption{Representative signal-to-action mappings.}
+\label{tab:signal-action}
+\centering
+\footnotesize
+\begin{tabularx}{\columnwidth}{p{0.18\columnwidth} p{0.18\columnwidth} p{0.14\columnwidth} Y}
+\toprule
+\textbf{Signal} & \textbf{Action} & \textbf{Recovery} & \textbf{Interpretation} \\
+\midrule
+Idle compute proxy & Resize down & 60\% & Conservative efficiency recovery from a billing-side idle signal \\
+Zombie resource & Remove resource & 100\% & Remove a resource when spend is effectively dormant \\
+Tagging gap & Enforce tags & 0\% direct & Governance action that improves optimization readiness \\
+Unattributed cost gap & Enforce tags & 0\% direct & Accountability repair rather than immediate cost reduction \\
+Forecast risk & Review forecast risk & 0\% direct & Early warning rather than direct savings action \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Current benchmark outputs show that the recommendation space is dominated by idle compute proxy actions. Query results report 48 medium-risk \texttt{resize\_down} recommendations accounting for \$1{,}545.74 in estimated savings, while governance-oriented \texttt{enforce\_tags} actions carry zero direct savings but remain important because unattributed NEC blocks accountable optimization.
+
+\subsection{Forecasting and Lifecycle Validation}
+The forecasting layer is intentionally lightweight. It estimates month-end NEC using a 70/30 blend of current run rate and trailing three-month average whenever sufficient history exists; otherwise it falls back to current run rate alone:
+\begin{equation}
+f = 0.7r + 0.3a
+\end{equation}
+or, when history is insufficient,
+\begin{equation}
+f = r.
+\end{equation}
+This model favors transparency over predictive complexity. The current benchmark backtest reports 68 evaluations with mean absolute error of \$7.86, mean absolute percentage error of 2.98\%, and a within-10-percent rate of 95.59\%.
+
+The final layer treats recommendations as persisted operational objects rather than disposable dashboard rows. Lifecycle records store states such as \texttt{recommended}, \texttt{approved}, \texttt{implemented}, and \texttt{verified}, along with expected savings, realized savings, and derived accuracy. The current repository state should be described carefully: all 95 recommendations are still in the \texttt{recommended} state, with \$1{,}709.83 expected savings and \$0 realized savings. The lifecycle layer is therefore best presented as implemented validation instrumentation rather than mature realized-savings evidence.
